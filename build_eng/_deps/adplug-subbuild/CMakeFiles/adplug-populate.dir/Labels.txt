@@ -1,0 +1,14 @@
+# Target labels
+ adplug-populate
+# Source files and their labels
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/CMakeFiles/adplug-populate
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/CMakeFiles/adplug-populate.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/CMakeFiles/adplug-populate-complete.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-build.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-configure.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-download.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-install.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-mkdir.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-patch.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-test.rule
+D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-subbuild/adplug-populate-prefix/src/adplug-populate-stamp/adplug-populate-update.rule

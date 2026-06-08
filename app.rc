@@ -1,0 +1,4 @@
+// JJoMe MIDI Player Resource File
+// Windows icon resource
+
+IDI_ICON1 ICON "K_icon.ico"

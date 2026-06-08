@@ -1,0 +1,13 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/cmake_install.cmake",
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/libbinio-build/cmake_install.cmake",
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/libbinio-build/doc/cmake_install.cmake",
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/libbinio-build/src/cmake_install.cmake",
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-build/cmake_install.cmake",
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-build/doc/cmake_install.cmake",
+		"D:/py/midi-k-c260415/github_clean_dist/build_eng/_deps/adplug-build/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

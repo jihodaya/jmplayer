@@ -1,0 +1,2 @@
+C:\Qt\Tools\mingw1310_64\bin\ar.exe qc liblibbinio_static.a CMakeFiles/libbinio.dir/libbinio_autogen/mocs_compilation.cpp.obj CMakeFiles/libbinio.dir/binio.cpp.obj CMakeFiles/libbinio.dir/binfile.cpp.obj CMakeFiles/libbinio.dir/binwrap.cpp.obj CMakeFiles/libbinio.dir/binstr.cpp.obj
+C:\Qt\Tools\mingw1310_64\bin\ranlib.exe liblibbinio_static.a

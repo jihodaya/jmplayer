@@ -1,0 +1,3 @@
+D:/py/midi-k-c260415/github_clean_dist/build/_deps/adplug-subbuild/CMakeFiles/adplug-populate.dir
+D:/py/midi-k-c260415/github_clean_dist/build/_deps/adplug-subbuild/CMakeFiles/edit_cache.dir
+D:/py/midi-k-c260415/github_clean_dist/build/_deps/adplug-subbuild/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/CMakeFiles/libbinio-populate"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/CMakeFiles/libbinio-populate.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/CMakeFiles/libbinio-populate-complete.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-build.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-configure.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-download.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-install.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-patch.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-test.rule"
+		},
+		{
+			"file" : "D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-subbuild/libbinio-populate-prefix/src/libbinio-populate-stamp/libbinio-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libbinio-populate"
+		],
+		"name" : "libbinio-populate"
+	}
+}
