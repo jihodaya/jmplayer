@@ -1,3 +1,0 @@
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f CMakeFiles\MidiPlayer.dir/objects.a
-C:\Qt\Tools\mingw1310_64\bin\ar.exe qc CMakeFiles\MidiPlayer.dir/objects.a @CMakeFiles\MidiPlayer.dir\objects1.rsp
-C:\Qt\Tools\mingw1310_64\bin\g++.exe -O3 -DNDEBUG -mwindows -Wl,--whole-archive CMakeFiles\MidiPlayer.dir/objects.a -Wl,--no-whole-archive -o MidiPlayer.exe -Wl,--out-implib,libMidiPlayer.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\MidiPlayer.dir\linkLibs.rsp
