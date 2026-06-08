@@ -1,4 +1,4 @@
-# JMPlayer R2.4c 빌드 및 배포 가이드
+# JMPlayer 빌드 및 배포 가이드
 
 이 문서는 `build_release.bat` 배치 파일을 이용하여 Windows 환경에서 **JMPlayer R2.4c**의 릴리즈 배포 버전을 빌드하는 방법을 설명합니다.
 
