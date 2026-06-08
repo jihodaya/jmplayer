@@ -1,4 +1,5 @@
 # 🚀 JMPlayer R2.4c (JJoMe MIDI Player)
+<img width="1372" height="675" alt="image" src="https://github.com/user-attachments/assets/24fafd45-3aa8-4a48-8774-9296c70173a9" />
 
 
 **JMPlayer** is a simple MIDI and retro chiptune player written in C++ using the Qt6 framework. It is built to play and visualize 1990s Korean retro music formats (such as `.SOP`, `.GYB`, `.NOB`, `.OKM` / `.OKA`, and `.IMS` / `.ISS`) along with standard `.ROL` (AdLib) and VGM/VGZ chiptunes, utilizing software OPL3 emulation and SoundFont engines.
