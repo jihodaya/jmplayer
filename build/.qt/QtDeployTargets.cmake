@@ -1,7 +1,0 @@
-set(__QT_DEPLOY_TARGET_libbinio_FILE D:/py/midi-k-c260415/github_clean_dist/build/_deps/libbinio-build/src/liblibbinio_static.a)
-set(__QT_DEPLOY_TARGET_libbinio_TYPE STATIC_LIBRARY)
-set(__QT_DEPLOY_TARGET_adplug_FILE D:/py/midi-k-c260415/github_clean_dist/build/_deps/adplug-build/src/libadplug.a)
-set(__QT_DEPLOY_TARGET_adplug_TYPE STATIC_LIBRARY)
-set(__QT_DEPLOY_TARGET_MidiPlayer_FILE D:/py/midi-k-c260415/github_clean_dist/build/MidiPlayer.exe)
-set(__QT_DEPLOY_TARGET_MidiPlayer_TYPE EXECUTABLE)
-set(__QT_DEPLOY_TARGET_MidiPlayer_RUNTIME_DLLS C:/Qt/6.9.2/mingw_64/bin/Qt6Widgets.dll;C:/Qt/6.9.2/mingw_64/bin/Qt6Multimedia.dll;C:/Qt/6.9.2/mingw_64/bin/Qt6Network.dll;C:/Qt/6.9.2/mingw_64/bin/Qt6Gui.dll;C:/Qt/6.9.2/mingw_64/bin/Qt6Core.dll)
