@@ -1,4 +1,4 @@
-# 🚀 JMPlayer R2.4c (JJoMe MIDI Player)
+# 🚀 JMPlayer (JJoMe MIDI-OPL Player)
 <img width="1372" height="675" alt="image" src="https://github.com/user-attachments/assets/24fafd45-3aa8-4a48-8774-9296c70173a9" />
 
 
