@@ -1,6 +1,7 @@
 # 🚀 JMPlayer (JJoMe MIDI-OPL Player)
 <img width="1372" height="675" alt="image" src="https://github.com/user-attachments/assets/24fafd45-3aa8-4a48-8774-9296c70173a9" />
-<img width="1372" height="675" alt="JMPLAYER_R24b_" src="https://github.com/user-attachments/assets/817d5f3f-ad6a-46d1-97bf-1e0724ba251e" />
+<img width="520" height="293" alt="JMPLAYER_R24b" src="https://github.com/user-attachments/assets/bf4209e2-bff3-4e56-b502-bb252f41726e" />
+
 
 https://www.youtube.com/@jjome_Plus
 
