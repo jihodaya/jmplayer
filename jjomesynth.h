@@ -86,6 +86,10 @@ private:
     std::atomic<bool> m_isRecording;
     std::atomic<bool> m_isPlaybackActive;
     QMutex m_encoderMutex;
+    // Lazy WAV creation: the file is NOT created when recording is armed —
+    // only when the first audio actually arrives (i.e. playback is running).
+    // Guarded by m_encoderMutex.
+    QString m_pendingWavPath;
 
     // Lock-free SPSC PCM Ring Buffer for recording
     // ~4 seconds of stereo float audio at 49716 Hz (≈1.5 MB)

@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QMutexLocker>
 #include <QFileInfo>
+#include <QDir>
 #include "imsplayer.h"
 #include "gybplayer.h"
 #include "okaplayer.h"
@@ -346,20 +347,17 @@ QString JJoMeSynth::getSoundFontName() const {
 bool JJoMeSynth::startRecording(const QString& wavFilePath) {
     QMutexLocker locker(&m_encoderMutex);
     if (m_isRecording.load(std::memory_order_relaxed)) return false;
-    
-    m_encoder = new ma_encoder;
-    ma_encoder_config config = ma_encoder_config_init(
-        ma_encoding_format_wav, ma_format_f32, 2, 49716
-    );
-    
-    ma_result result = ma_encoder_init_file_w(
-        wavFilePath.toStdWString().c_str(), &config, m_encoder
-    );
-    if (result != MA_SUCCESS) {
-        delete m_encoder;
-        m_encoder = nullptr;
-        return false;
-    }
+
+    // Validate the target directory up front so obvious path errors still fail
+    // here, but do NOT create the WAV file yet: recording is only ARMED now.
+    // The file is created lazily by the writer thread when the first audio
+    // arrives — audio only flows while playback is active (see renderAudio),
+    // so pressing record without playing no longer leaves an empty WAV behind.
+    QFileInfo fi(wavFilePath);
+    QDir dir = fi.absoluteDir();
+    if (!dir.exists() && !dir.mkpath(".")) return false;
+    m_pendingWavPath = wavFilePath;
+    m_encoder = nullptr;
 
     // Allocate PCM ring buffer (~1.5 MB)
     m_pcmRing = new float[PCM_RING_SAMPLES];
@@ -387,8 +385,10 @@ void JJoMeSynth::stopRecording() {
     // Flush any remaining data in the ring buffer
     flushRemainingPcm();
 
-    // Clean up encoder
+    // Clean up encoder. If it was never created (armed but nothing played),
+    // no WAV file exists — exactly the desired behavior.
     QMutexLocker locker(&m_encoderMutex);
+    m_pendingWavPath.clear();
     if (m_encoder) {
         ma_encoder_uninit(m_encoder);
         delete m_encoder;
@@ -436,6 +436,21 @@ void JJoMeSynth::recWriterLoop() {
 
         // Write to disk (this may block briefly — that's fine, we're on a dedicated thread)
         QMutexLocker locker(&m_encoderMutex);
+        if (!m_encoder && !m_pendingWavPath.isEmpty()) {
+            // First audio has arrived (playback is running) — create the WAV now.
+            ma_encoder* enc = new ma_encoder;
+            ma_encoder_config config = ma_encoder_config_init(
+                ma_encoding_format_wav, ma_format_f32, 2, 49716
+            );
+            if (ma_encoder_init_file_w(m_pendingWavPath.toStdWString().c_str(),
+                                       &config, enc) == MA_SUCCESS) {
+                m_encoder = enc;
+            } else {
+                delete enc;
+                qDebug() << "[JJoMeSynth] Failed to create WAV file:" << m_pendingWavPath;
+            }
+            m_pendingWavPath.clear();   // one attempt only
+        }
         if (m_encoder) {
             ma_uint64 framesWritten;
             ma_encoder_write_pcm_frames(m_encoder, tempBuf, toRead / 2, &framesWritten);
