@@ -149,6 +149,9 @@ set(SOURCES
     channelmonitor.cpp
     lyricswindow.cpp
     lyricswindow_editor.cpp
+    mainwindow_playlist.cpp
+    mainwindow_lyrics.cpp
+    mainwindow_playback.cpp
     settingsmanager.cpp
     nobfilehandler.cpp
     gybfilehandler.cpp
