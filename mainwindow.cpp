@@ -51,6 +51,7 @@
 #include <QMenu>
 #include <QAction>
 #include <QItemSelectionModel>
+#include <QElapsedTimer>
 #include <algorithm>
 #include <climits>
 #include "playlistmodel.h"
@@ -1630,21 +1631,31 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         // While a modal dialog (file picker, message box, settings dialog) is open,
         // do NOT hijack Enter/Space/Delete/arrows — the dialog must keep them
         // (e.g. Enter = OK). F1/F12 above keep their own re-entry guards.
+        static QElapsedTimer modalGraceTimer;   // restarted on every key seen while a modal is up
         if (QApplication::activeModalWidget() != nullptr) {
+            modalGraceTimer.restart();
             return false;
         }
+        // Just after a modal closed (e.g. the F12 OPL dialog accepted on Enter),
+        // auto-repeat / trailing presses of the SAME Enter keystroke arrive here
+        // with the modal already gone and used to re-trigger playlist playback.
+        // Swallow Enter/Space during a short grace window after any modal key.
+        const bool justLeftModal = modalGraceTimer.isValid() && modalGraceTimer.elapsed() < 300;
 
         bool inSearch = (searchBox && searchBox->hasFocus());
 
         // Enter: enter the selected folder / play the selected file. Consumed here
         // (before the list's own Enter/Space handling) so it works regardless of
-        // which widget currently holds focus.
+        // which widget currently holds focus. Auto-repeat is ignored: holding
+        // Enter must not machine-gun playback restarts.
         if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) && !inSearch) {
+            if (keyEvent->isAutoRepeat() || justLeftModal) return true;
             activateSelectedPlaylistRow();
             return true;
         }
         // Space: pause/resume the CURRENT track ONLY (never starts a new selection).
         if (keyEvent->key() == Qt::Key_Space && keyEvent->modifiers() == Qt::NoModifier && !inSearch) {
+            if (keyEvent->isAutoRepeat() || justLeftModal) return true;
             spacePauseResume();
             return true;
         }
