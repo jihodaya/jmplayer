@@ -20,6 +20,7 @@
 #endif
 
 class ImsLevelMeterWidget; // For DOS-style IMS level meter
+class MidiLevelMeterWidget; // OPL-themed big level meter for the 16 MIDI channels
 
 class ChannelWidget : public QFrame
 {
@@ -113,7 +114,13 @@ private:
     
     QWidget *midiChannelsContainer;
     ChannelWidget *channelWidgets[16];
-    
+
+    // OPL-themed MIDI display: the 16 ChannelWidgets above stay alive as the
+    // data/state holders (program, naming, activity), but what the user sees is
+    // this big OPL-style meter fed in parallel from the same slots.
+    QWidget *midiMeterContainer = nullptr;
+    MidiLevelMeterWidget *midiLevelMeter = nullptr;
+
     QWidget *imsChannelsContainer;
     QList<ChannelWidget*> imsChannelWidgets;
     ImsLevelMeterWidget *imsLevelMeter = nullptr;

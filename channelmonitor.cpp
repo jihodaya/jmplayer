@@ -337,6 +337,279 @@ protected:
     }
 };;
 
+// OPL 스타일로 그리는 16채널 MIDI 레벨 미터.
+// 기능/데이터는 기존 MIDI 모니터 그대로(프로그램 번호, 악기명, 동시 노트 목록,
+// velocity 기반 강약)이고, 표현만 ImsLevelMeterWidget(OPL)과 동일한 분위기
+// (다크 배경, 악기명 카드, 그라데이션 세그먼트 VU 바 + 피크홀드)로 통일한다.
+class MidiLevelMeterWidget : public QWidget {
+public:
+    explicit MidiLevelMeterWidget(QWidget *parent = nullptr) : QWidget(parent) {
+        for (int i = 0; i < 16; ++i) {
+            m_prog[i] = -1;
+            m_level[i] = m_peak[i] = m_peakTimer[i] = m_hold[i] = 0;
+        }
+        // 채널 10(인덱스 9)은 MIDI 표준 드럼 채널
+        m_prog[9] = 0;
+        m_name[9] = QStringLiteral("Drum Kit");
+        m_decayTimer = new QTimer(this);
+        connect(m_decayTimer, &QTimer::timeout, this, &MidiLevelMeterWidget::decayStep);
+        m_decayTimer->start(40);
+    }
+
+    void noteOn(int ch, int note, int velocity) {
+        if (ch < 0 || ch >= 16) return;
+        bool found = false;
+        for (auto &n : m_notes[ch]) {
+            if (n.first == note) { n.second = velocity; found = true; break; }
+        }
+        if (!found) m_notes[ch].append(qMakePair(note, velocity));
+        if (velocity > m_level[ch]) m_level[ch] = velocity;
+        if (velocity > m_peak[ch]) { m_peak[ch] = velocity; m_peakTimer[ch] = 12; }
+        m_hold[ch] = 6;
+        update();
+    }
+
+    void noteOff(int ch, int note) {
+        if (ch < 0 || ch >= 16) return;
+        for (int i = m_notes[ch].size() - 1; i >= 0; --i) {
+            if (m_notes[ch][i].first == note) m_notes[ch].removeAt(i);
+        }
+        update();
+    }
+
+    void controller(int ch, int controller, int value) {
+        if (ch < 0 || ch >= 16) return;
+        if (controller == 7) { // 기존 UI와 동일: CC7(볼륨)이 레벨바를 직접 구동
+            m_level[ch] = value;
+            if (value > m_peak[ch]) { m_peak[ch] = value; m_peakTimer[ch] = 12; }
+            m_hold[ch] = 6;
+            update();
+        }
+    }
+
+    void setProgram(int ch, int program, const QString& name) {
+        if (ch < 0 || ch >= 16) return;
+        m_prog[ch] = program;
+        m_name[ch] = name;
+        m_hold[ch] = 6; // 프로그램 변경 시 잠깐 점등(기존 플래시에 대응)
+        update();
+    }
+
+    // 사운드모드(GM/MT-32 등) 변경 시 이름만 조용히 갱신 (점등 없음)
+    void updateInstrumentName(int ch, int program, const QString& name) {
+        if (ch < 0 || ch >= 16) return;
+        m_prog[ch] = program;
+        m_name[ch] = name;
+        update();
+    }
+
+    void resetAll() {
+        for (int i = 0; i < 16; ++i) {
+            m_notes[i].clear();
+            m_level[i] = m_peak[i] = m_peakTimer[i] = m_hold[i] = 0;
+            // 프로그램/악기명은 유지 — 기존 reset과 동일하게 노트/레벨만 초기화
+        }
+        update();
+    }
+
+private:
+    void decayStep() {
+        bool changed = false;
+        for (int i = 0; i < 16; ++i) {
+            if (m_level[i] > 0) { m_level[i] -= 4; if (m_level[i] < 0) m_level[i] = 0; changed = true; }
+            if (m_peakTimer[i] > 0) {
+                m_peakTimer[i]--;
+            } else if (m_peak[i] > 0) {
+                m_peak[i] -= 2; if (m_peak[i] < 0) m_peak[i] = 0; changed = true;
+            }
+            if (m_hold[i] > 0) { m_hold[i]--; changed = true; }
+        }
+        if (changed) update();
+    }
+
+    static QString noteToText(int note) {
+        QString name = QString("C C#D D#E F F#G G#A A#B ").mid((note % 12) * 2, 2).trimmed();
+        return QString("%1%2").arg(name).arg(note / 12 - 1);
+    }
+
+    QColor getGradualColor(float ratio) {
+        struct ColorStop { float pos; QColor color; };
+        static const ColorStop stops[] = {
+            {0.00f, QColor(150, 240, 255)},
+            {0.25f, QColor(0, 160, 255)},
+            {0.55f, QColor(0, 255, 60)},
+            {0.75f, QColor(255, 255, 0)},
+            {0.90f, QColor(255, 120, 0)},
+            {1.00f, QColor(255, 0, 0)}
+        };
+        for (int i = 0; i < 5; ++i) {
+            if (ratio >= stops[i].pos && ratio <= stops[i+1].pos) {
+                float f = (ratio - stops[i].pos) / (stops[i+1].pos - stops[i].pos);
+                int r = (int)(stops[i].color.red() * (1.0f - f) + stops[i+1].color.red() * f);
+                int g = (int)(stops[i].color.green() * (1.0f - f) + stops[i+1].color.green() * f);
+                int b = (int)(stops[i].color.blue() * (1.0f - f) + stops[i+1].color.blue() * f);
+                return QColor(r, g, b);
+            }
+        }
+        return stops[5].color;
+    }
+
+    QList<QPair<int,int>> m_notes[16]; // (note, velocity)
+    int m_level[16];
+    int m_peak[16];
+    int m_peakTimer[16];
+    int m_hold[16];
+    int m_prog[16];
+    QString m_name[16];
+    QTimer *m_decayTimer;
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        int w = width();
+        int h = height();
+        painter.fillRect(0, 0, w, h, QColor(12, 12, 15));
+
+        const int numCh = 16;
+        int marginX = 6;
+        int marginY = 6;
+        int rowSpacing = 2;
+        int availableH = h - (marginY * 2);
+        int rowH = (availableH - (rowSpacing * (numCh - 1))) / numCh;
+        if (rowH < 12) rowH = 12;
+
+        // 좌측 정보영역 / 우측 대형 바 분할 (OPL과 동일한 입체 경계선)
+        int leftAreaW = 208;
+        painter.setPen(QColor(40, 40, 50));
+        painter.drawLine(leftAreaW, marginY, leftAreaW, h - marginY);
+        painter.setPen(QColor(20, 20, 25));
+        painter.drawLine(leftAreaW + 1, marginY, leftAreaW + 1, h - marginY);
+
+        int fontSize = (rowH >= 15) ? 8 : 7;
+
+        for (int i = 0; i < numCh; ++i) {
+            int y = marginY + i * (rowH + rowSpacing);
+            bool isVisualOn = !m_notes[i].isEmpty() || m_hold[i] > 0;
+            int vol = m_level[i];
+            int peak = m_peak[i];
+
+            // 좌측 2px 활성 인디케이터
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(isVisualOn ? QColor(0, 140, 160) : QColor(42, 45, 48));
+            painter.drawRect(marginX, y + 2, 2, rowH - 4);
+
+            // 채널 번호 (01-16)
+            QString chLabel = QString("%1").arg(i + 1, 2, 10, QChar('0'));
+            QFont labelFont("Consolas");
+            labelFont.setPointSize(fontSize);
+            labelFont.setBold(true);
+            painter.setFont(labelFont);
+            painter.setPen(isVisualOn ? QColor(115, 175, 190) : QColor(80, 85, 90));
+            painter.drawText(marginX + 6, y, 18, rowH, Qt::AlignVCenter | Qt::AlignLeft, chLabel);
+
+            // 악기명 카드
+            int cardX = marginX + 24;
+            int cardW = 76;
+            bool hasName = !m_name[i].isEmpty();
+            painter.setPen(Qt::NoPen);
+            if (!hasName) {
+                painter.setBrush(QColor(20, 20, 22, 100));
+            } else if (isVisualOn) {
+                painter.setBrush(QColor(45, 45, 52, 220));
+            } else {
+                painter.setBrush(QColor(28, 28, 32, 120));
+            }
+            painter.drawRoundedRect(cardX, y + 1, cardW, rowH - 2, 3, 3);
+
+            QFont instFont("Malgun Gothic");
+            instFont.setPointSize(fontSize);
+            instFont.setBold(isVisualOn);
+            painter.setFont(instFont);
+            if (!hasName) {
+                painter.setPen(QColor(55, 55, 60, 150));
+                painter.drawText(cardX, y, cardW, rowH, Qt::AlignCenter, "---");
+            } else {
+                QString nm = m_name[i];
+                if (nm.length() > 10) nm = nm.left(10);
+                painter.setPen(isVisualOn ? QColor(215, 215, 220) : QColor(90, 90, 98));
+                painter.drawText(cardX, y, cardW, rowH, Qt::AlignCenter, nm);
+            }
+
+            // 프로그램 번호 (1-128)
+            int progX = cardX + cardW + 4;
+            QFont monoFont("Consolas");
+            monoFont.setPointSize(fontSize);
+            monoFont.setBold(isVisualOn);
+            painter.setFont(monoFont);
+            if (m_prog[i] >= 0) {
+                painter.setPen(isVisualOn ? QColor(120, 170, 200) : QColor(70, 80, 90));
+                painter.drawText(progX, y, 24, rowH, Qt::AlignVCenter | Qt::AlignLeft, QString::number(m_prog[i] + 1));
+            } else {
+                painter.setPen(QColor(50, 50, 55));
+                painter.drawText(progX, y, 24, rowH, Qt::AlignVCenter | Qt::AlignLeft, "...");
+            }
+
+            // 동시 노트 목록 (velocity별 색상 — 기존 MIDI 기능 유지)
+            int notesX = progX + 26;
+            int notesW = leftAreaW - notesX - 2;
+            if (m_notes[i].isEmpty()) {
+                painter.setPen(QColor(50, 50, 55));
+                painter.drawText(notesX, y, notesW, rowH, Qt::AlignVCenter | Qt::AlignLeft, "...");
+            } else {
+                QFontMetrics fm(monoFont);
+                int xCursor = notesX;
+                for (const auto &n : m_notes[i]) {
+                    QString txt = noteToText(n.first);
+                    int tw = fm.horizontalAdvance(txt) + fm.horizontalAdvance(QChar(' '));
+                    if (xCursor + tw > notesX + notesW) break;
+                    int vel = n.second;
+                    QColor c = (vel > 100) ? QColor(255, 100, 100)
+                             : (vel > 64)  ? QColor(230, 215, 120)
+                                           : QColor(120, 195, 130);
+                    painter.setPen(c);
+                    painter.drawText(xCursor, y, tw, rowH, Qt::AlignVCenter | Qt::AlignLeft, txt);
+                    xCursor += tw;
+                }
+            }
+
+            // 우측: 채널 라벨 + OPL과 동일한 대형 세그먼트 VU 바
+            int rightX = leftAreaW + 6;
+            painter.setFont(labelFont);
+            painter.setPen(isVisualOn ? QColor(115, 135, 155) : QColor(55, 60, 65));
+            painter.drawText(rightX, y, 18, rowH, Qt::AlignVCenter | Qt::AlignLeft, chLabel);
+
+            int barX = rightX + 20;
+            int barW = w - barX - marginX;
+            if (barW < 20) barW = 20;
+
+            int numSegments = 32;
+            float segSpacing = 1.5f;
+            float totalSpacing = segSpacing * (numSegments - 1);
+            float segW = (barW - totalSpacing) / numSegments;
+            if (segW < 1.0f) segW = 1.0f;
+
+            int activeSegments = (vol * numSegments) / 127;
+            int peakSegment = (peak * numSegments) / 127;
+
+            for (int s = 0; s < numSegments; ++s) {
+                float segX = barX + s * (segW + segSpacing);
+                float ratio = (float)s / numSegments;
+                QColor segColor = getGradualColor(ratio);
+                if (s < activeSegments) {
+                    painter.fillRect(QRectF(segX, y + 2, segW, rowH - 4), segColor);
+                } else {
+                    painter.fillRect(QRectF(segX, y + 2, segW, rowH - 4), QColor(25, 25, 28));
+                }
+                if (s == peakSegment && s > 0) {
+                    painter.fillRect(QRectF(segX, y + 2, segW, rowH - 4), QColor(255, 255, 255, 230));
+                }
+            }
+        }
+    }
+};
+
 ChannelWidget::ChannelWidget(int channelNumber, QWidget *parent)
     : QFrame(parent), channel(channelNumber), currentVolume(0), currentProgram(0), hasProgramChangeReceived(false), isChannelActive(false)
 {
@@ -799,7 +1072,22 @@ void ChannelMonitor::setupUI()
         midiLayout->addWidget(channelWidgets[i]);
     }
     mainLayout->addWidget(midiChannelsContainer);
-    
+    // The widget-grid stays alive as the data/state holder (program, naming,
+    // activity), but the visible MIDI display is the OPL-themed meter below.
+    midiChannelsContainer->hide();
+
+    // OPL-themed big level meter for MIDI channels (visible MIDI display)
+    midiMeterContainer = new QWidget(centralWidget);
+    midiMeterContainer->setStyleSheet("background-color: transparent;");
+    midiMeterContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    QVBoxLayout *midiMeterLayout = new QVBoxLayout(midiMeterContainer);
+    midiMeterLayout->setContentsMargins(0, 0, 0, 0);
+    midiMeterLayout->setSpacing(2);
+    midiLevelMeter = new MidiLevelMeterWidget(midiMeterContainer);
+    midiLevelMeter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    midiMeterLayout->addWidget(midiLevelMeter);
+    mainLayout->addWidget(midiMeterContainer);
+
     // Container for IMS channels (no scroll, just a plain widget)
     imsChannelsContainer = new QWidget(centralWidget);
     imsChannelsContainer->setStyleSheet("background-color: transparent;");
@@ -910,6 +1198,7 @@ void ChannelMonitor::onNoteOn(int channel, int note, int velocity)
 {
     if (channel >= 0 && channel < 16) {
         channelWidgets[channel]->setNote(note, velocity);
+        if (midiLevelMeter) midiLevelMeter->noteOn(channel, note, velocity);
     }
 }
 
@@ -917,6 +1206,7 @@ void ChannelMonitor::onNoteOff(int channel, int note)
 {
     if (channel >= 0 && channel < 16) {
         channelWidgets[channel]->clearNote(note);
+        if (midiLevelMeter) midiLevelMeter->noteOff(channel, note);
     }
 }
 
@@ -924,6 +1214,7 @@ void ChannelMonitor::onControllerChange(int channel, int controller, int value)
 {
     if (channel >= 0 && channel < 16) {
         channelWidgets[channel]->setController(controller, value);
+        if (midiLevelMeter) midiLevelMeter->controller(channel, controller, value);
     }
 }
 
@@ -931,6 +1222,10 @@ void ChannelMonitor::onProgramChange(int channel, int program)
 {
     if (channel >= 0 && channel < 16) {
         channelWidgets[channel]->setProgram(program);
+        if (midiLevelMeter) {
+            midiLevelMeter->setProgram(channel, program,
+                channelWidgets[channel]->getInstrumentName(program));
+        }
     }
 }
 
@@ -939,6 +1234,7 @@ void ChannelMonitor::resetAllChannels()
     for (int i = 0; i < 16; ++i) {
         channelWidgets[i]->reset();
     }
+    if (midiLevelMeter) midiLevelMeter->resetAll();
 }
 
 void ChannelMonitor::setSoundMode(ChannelWidget::SoundMode mode)
@@ -977,6 +1273,11 @@ void ChannelMonitor::setSoundMode(ChannelWidget::SoundMode mode)
             QString instrumentName = channelWidgets[i]->getInstrumentName(channelWidgets[i]->currentProgram);
             channelWidgets[i]->instrumentLabel->setText(instrumentName);
         }
+        // Keep the OPL-themed meter's name cards in sync with the new mode
+        if (midiLevelMeter && (channelWidgets[i]->hasProgramChangeReceived || i == 9)) {
+            midiLevelMeter->updateInstrumentName(i, channelWidgets[i]->currentProgram,
+                channelWidgets[i]->getInstrumentName(channelWidgets[i]->currentProgram));
+        }
     }
 }
 
@@ -994,7 +1295,8 @@ void ChannelMonitor::setImsMode(bool isIms, const QString& bankName, const QStri
         soundModeLabel->setText(QString("Mode: %1 (%2)").arg(formatLabel).arg(bankName.isEmpty() ? "Built-in Bank" : bankName));
         confidenceLabel->hide();
         midiChannelsContainer->hide();
-        
+        if (midiMeterContainer) midiMeterContainer->hide();
+
         if (!imsLevelMeter) {
             imsLevelMeter = new ImsLevelMeterWidget(imsChannelsContainer);
             imsLevelMeter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -1021,7 +1323,9 @@ void ChannelMonitor::setImsMode(bool isIms, const QString& bankName, const QStri
         setSoundMode(ChannelWidget::currentSoundMode);
         confidenceLabel->show();
         imsChannelsContainer->hide();
-        midiChannelsContainer->show();
+        // Visible MIDI display is the OPL-themed meter; the widget grid stays
+        // hidden as the state holder.
+        if (midiMeterContainer) midiMeterContainer->show();
         positionBesideMainWindow();
     }
 }
@@ -1089,6 +1393,12 @@ void ChannelMonitor::refreshActiveChannels()
         if (widget->isChannelActive) {
             widget->programLabel->setText(QString::number(widget->currentProgram + 1));
             widget->instrumentLabel->setText(widget->getInstrumentName(widget->currentProgram));
+        }
+
+        // Keep the OPL-themed meter's name cards in sync as well
+        if (midiLevelMeter && (widget->hasProgramChangeReceived || i == 9)) {
+            midiLevelMeter->updateInstrumentName(i, widget->currentProgram,
+                widget->getInstrumentName(widget->currentProgram));
         }
     }
 }

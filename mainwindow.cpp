@@ -5805,7 +5805,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player R2.4d";
+    QString title = "🎵 JJoMe MIDI Player R2.4e";
     
     if (currentNode) {
         if (currentNode->isFolder) {
