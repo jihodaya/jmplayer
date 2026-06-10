@@ -914,11 +914,13 @@ void MainWindow::updateTrackInfo()
         QString displayText;
         QString sfInfo = "";
         
-        // Only show SF info if playing MIDI and using internal synth (not for OPL/GYB)
+        // Only show SF info if playing through the internal SoundFont synth.
+        // .okm/.okw play via the synth (only .oka is OPL-routed), so exclude just
+        // the OPL formats — the previous isOkaFile() check also hid it for OKM.
         bool isIms = isOplFile(filePath);
         bool isGyb = isGybFile(filePath);
-        bool isOka = isOkaFile(filePath);
-        if (isPlaying && !isIms && !isGyb && !isOka && deviceComboBox->currentText() == "[JJoMe Synth (SoundFont)]") {
+        bool okaViaOpl = isOkaOplFile(filePath);
+        if (isPlaying && !isIms && !isGyb && !okaViaOpl && deviceComboBox->currentText() == "[JJoMe Synth (SoundFont)]") {
             QString sfName = JJoMeSynth::instance().getSoundFontName();
             if (!sfName.isEmpty()) {
                 sfInfo = QString("<div style='font-size: 11px; color: #FFA500; font-weight: bold;'>[SoundFont: %1]</div>").arg(sfName);

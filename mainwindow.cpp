@@ -322,15 +322,51 @@ void MainWindow::setupUI()
     sfManagerButton->setToolTip("Manage SoundFonts");
     
     connect(sfManagerButton, &QPushButton::clicked, this, [this]() {
+        SettingsManager& settings = SettingsManager::instance();
+        const QString beforeSf = settings.value("Synth/SoundFontPath", "").toString();
+
         SoundFontManagerDialog dialog(this);
         dialog.exec();
-        
-        // If SoundFont was changed and internal synth is active, update MidiPlayer
-        if (deviceComboBox->currentText() == "[JJoMe Synth (SoundFont)]") {
-            SettingsManager& settings = SettingsManager::instance();
-            QString activeSf = settings.value("Synth/SoundFontPath", "").toString();
-            midiPlayer->setUseInternalSynth(true, activeSf);
+
+        if (deviceComboBox->currentText() != "[JJoMe Synth (SoundFont)]") return;
+
+        const QString activeSf = settings.value("Synth/SoundFontPath", "").toString();
+        if (activeSf.isEmpty()) return;
+
+        // Nothing actually changed — leave the synth (and any playback) alone.
+        if (QDir::cleanPath(activeSf).compare(QDir::cleanPath(beforeSf), Qt::CaseInsensitive) == 0) {
             updateWindowTitle();
+            return;
+        }
+
+        // Applying a new SoundFont tears down and re-creates the shared audio
+        // device + synth (JJoMeSynth::initialize → shutdown). Doing that while
+        // audio is rendering breaks the sound and desyncs channel programs, so:
+        // stop → apply → reload the same song → seek back → resume.
+        const bool wasPlaying = isPlaying;
+        const QString resumePath = !currentRawPath.isEmpty() ? currentRawPath : currentFile;
+        unsigned long resumeMs = 0;
+        if (wasPlaying) {
+            if (isGybFile(currentFile))           resumeMs = gybPlayer->getPosition();
+            else if (isOplFile(currentFile))      resumeMs = imsPlayer->getPosition();
+            else if (isOkaOplFile(currentFile))   resumeMs = okaPlayer->getPosition();
+            else                                  resumeMs = midiPlayer->getCurrentPosition();
+            stop();
+        }
+
+        midiPlayer->setUseInternalSynth(true, activeSf);
+        updateWindowTitle();
+
+        if (wasPlaying && !resumePath.isEmpty() && loadAndPlayByRawPath(resumePath)) {
+            // Seek back once the engine is rolling (players accept ms seeks
+            // while playing — same path the progress slider uses).
+            QTimer::singleShot(350, this, [this, resumeMs]() {
+                if (!isPlaying || resumeMs == 0) return;
+                if (isGybFile(currentFile))           gybPlayer->setPosition(resumeMs);
+                else if (isOplFile(currentFile))      imsPlayer->setPosition(resumeMs);
+                else if (isOkaOplFile(currentFile))   okaPlayer->setPosition(resumeMs);
+                else                                  midiPlayer->setPosition(resumeMs);
+            });
         }
     });
 
