@@ -1169,6 +1169,9 @@ void MainWindow::activateSelectedPlaylistRow()
 {
     int row = plCurrentRow();
     if (row < 0) row = plFirstSelectedRow();
+    // No selection (e.g. Enter straight from the search box): take the top row,
+    // so search → Enter plays the first match.
+    if (row < 0 && plCount() > 0) row = 0;
     if (row < 0) return;
     int itemType = plRowType(row);
     if (itemType == FOLDER || itemType == PARENT_FOLDER) {
@@ -1184,6 +1187,11 @@ void MainWindow::onFileSelected()
     // FIX: Do not update currentFile, TrackInfo, or ChannelMonitor while playing.
     // This keeps the display locked to the currently playing song even if the user browses the playlist.
     if (isPlaying) return;
+
+    // Remember whether the user is typing in the search box BEFORE the preview
+    // work below — lyrics-window updates, monitor mode switches and zip
+    // extraction can steal focus mid-way, and we must hand it back afterwards.
+    const bool searchTyping = (searchBox && searchBox->hasFocus());
 
     updateTrackInfo();
     updateTimeDisplay();
@@ -1223,7 +1231,15 @@ void MainWindow::onFileSelected()
     // Save current track selection immediately
     SettingsManager& settings = SettingsManager::instance();
     settings.setValue("General/currentTrackIndex", plCurrentRow());
-    if (fileList) {
+    // Focus policy: if the user was typing in the search box, KEEP/RESTORE the
+    // search box focus (preview work above may have stolen it — e.g. lyrics
+    // window update when the first match is a NOB). Otherwise the list takes
+    // focus as before.
+    if (searchTyping) {
+        if (searchBox && !searchBox->hasFocus()) {
+            searchBox->setFocus();
+        }
+    } else if (fileList) {
         fileList->setFocus();
     }
 }

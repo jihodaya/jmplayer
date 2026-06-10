@@ -373,13 +373,57 @@ void MainWindow::onCleanupPlaylist()
 
 void MainWindow::onSearchTextChanged()
 {
-    QString searchText = searchBox->text().trimmed();
-    if (playlistProxy) {
-        playlistProxy->setFilterFixedString(searchText);
-        if (!searchText.isEmpty() && playlistProxy->rowCount() > 0) {
-            plSetCurrentRow(0);
-        }
+    // Debounce: searching re-walks the whole tree, so wait for typing to settle.
+    if (!searchDebounceTimer) {
+        searchDebounceTimer = new QTimer(this);
+        searchDebounceTimer->setSingleShot(true);
+        searchDebounceTimer->setInterval(150);
+        connect(searchDebounceTimer, &QTimer::timeout, this, [this]() {
+            performGlobalSearch(searchBox ? searchBox->text().trimmed() : QString());
+        });
     }
+    searchDebounceTimer->start();
+}
+
+void MainWindow::performGlobalSearch(const QString& searchText)
+{
+    if (!playlistProxy || !playlistModel) return;
+
+    // Empty text → leave search mode and restore the current folder view.
+    if (searchText.isEmpty()) {
+        playlistProxy->setFilterFixedString(QString());
+        updateUIFromCurrentNode();
+        return;
+    }
+
+    // GLOBAL search: walk the whole playlist tree (not just the visible folder)
+    // and collect every matching FILE, showing its folder for context. Matches
+    // against the display name (decoded titles included) and the file name.
+    QVector<PlaylistRow> rows;
+    std::function<void(PlaylistTreeNode*)> walk = [&](PlaylistTreeNode* node) {
+        if (!node) return;
+        for (PlaylistTreeNode* child : node->children) {
+            if (child->isFolder) { walk(child); continue; }
+            if (child->name.contains(searchText, Qt::CaseInsensitive)
+                || QFileInfo(child->fullPath).fileName().contains(searchText, Qt::CaseInsensitive)) {
+                QString display = child->name;
+                if (child->parent && child->parent != playlistRoot && !child->parent->name.isEmpty()) {
+                    display += QStringLiteral("   —  ") + child->parent->name;
+                }
+                rows.append(PlaylistRow(display, child->fullPath, MIDI_FILE));
+            }
+        }
+    };
+    walk(playlistRoot);
+
+    // Rows are already filtered here; the proxy must NOT filter again (the
+    // appended folder suffix is not part of the match and must not hide rows).
+    playlistProxy->setFilterFixedString(QString());
+    playlistModel->setRows(std::move(rows));
+    // Deliberately NO auto-selection here: selecting kicks off the heavy
+    // preview chain (lyrics window, monitor mode, zip extraction) which fights
+    // the user for focus on every typing pause. Enter plays the top result and
+    // Down moves into the list (handled in eventFilter / activateSelectedRow).
 }
 
 void MainWindow::addMidiFiles(const QStringList &filePaths)

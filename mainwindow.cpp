@@ -1680,6 +1680,23 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
         bool inSearch = (searchBox && searchBox->hasFocus());
 
+        // Esc in the search box: clear the search (restores the folder view)
+        // and hand focus back to the playlist.
+        if (inSearch && keyEvent->key() == Qt::Key_Escape) {
+            searchBox->clear();
+            if (fileList) fileList->setFocus();
+            return true;
+        }
+        // Down in the search box: move into the result list (select first row).
+        // Search results are intentionally not auto-selected while typing.
+        if (inSearch && keyEvent->key() == Qt::Key_Down) {
+            if (fileList && plCount() > 0) {
+                fileList->setFocus();
+                if (plCurrentRow() < 0) plSetCurrentRow(0);
+            }
+            return true;
+        }
+
         // Enter: enter the selected folder / play the selected file. Consumed here
         // (before the list's own Enter/Space handling) so it works regardless of
         // which widget currently holds focus. Auto-repeat is ignored: holding

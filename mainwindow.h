@@ -226,6 +226,7 @@ protected:
     QTimer *channelUpdateTimer;
     QTimer *previewSelectTimer = nullptr; // debounces the heavy per-selection preview load
     QTimer *playlistSaveTimer = nullptr; // debounces heavy playlist JSON saves
+    QTimer *searchDebounceTimer = nullptr; // debounces global playlist search
 
     // Timer for window position tracking
     QTimer *windowPositionTimer;
@@ -298,6 +299,9 @@ private:
     void addFolderToCurrentNodeWithoutSave(const QString &folderPath);
     void navigateToNode(PlaylistTreeNode* node);
     void updateUIFromCurrentNode();
+    // Global search: walks the WHOLE playlist tree and lists every matching file
+    // (with its folder for context). Empty text restores the current folder view.
+    void performGlobalSearch(const QString& searchText);
 
     // --- Playlist view bridge helpers (operate on proxy/visible rows, mirroring
     //     the old QListWidget row API so call sites stay 1:1) ---
