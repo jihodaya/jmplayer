@@ -217,18 +217,28 @@ bool MainWindow::updateLyricsWindowContent(const QString& filePath, bool isNobFi
 
     const QString context = contextTag ? QString::fromLatin1(contextTag) : QStringLiteral("update");
 
-    QString songTitle = QStringLiteral("Lyrics");
-    if (plHasCurrent()) {
-        songTitle = plCurrentText();
+    // Title must reflect the file whose lyrics are being shown (filePath), NOT the
+    // playlist *selection*. During continuous playback the selected row does not
+    // follow the playing track, so using plCurrentText() left the lyrics window
+    // showing the PREVIOUS song's title. Derive it straight from the file
+    // (player-state independent, same extractors updateTrackInfo uses).
+    QString cleanTitle;
+    if (!filePath.isEmpty()) {
+        if (isGybFile(filePath))                        cleanTitle = GybFileHandler::extractTitle(filePath);
+        else if (filePath.toLower().endsWith(".nob"))   cleanTitle = NobFileHandler::extractTitle(filePath);
+        else if (OkaFileHandler::isOkaFile(filePath))   cleanTitle = OkaFileHandler::extractTitle(filePath);
+        else if (isOplFile(filePath))                   cleanTitle = ImsPlayer::extractTitleQuick(filePath);
+        if (cleanTitle.trimmed().isEmpty())
+            cleanTitle = QFileInfo(filePath).completeBaseName();
     }
-    // Clean up title: remove "\xe2\x99\xab " and "FILENAME - "
-    QString cleanTitle = songTitle;
-    if (cleanTitle.startsWith("\xe2\x99\xab ")) {
-        cleanTitle = cleanTitle.mid(2);
-    }
-    int dashPos = cleanTitle.indexOf(" - ");
-    if (dashPos != -1) {
-        cleanTitle = cleanTitle.mid(dashPos + 3);
+    if (cleanTitle.trimmed().isEmpty()) {
+        // Last resort: the playlist selection text, cleaned of the 🎵 prefix and
+        // any "FILENAME - " lead-in.
+        QString songTitle = plHasCurrent() ? plCurrentText() : QStringLiteral("Lyrics");
+        cleanTitle = songTitle;
+        if (cleanTitle.startsWith("\xe2\x99\xab ")) cleanTitle = cleanTitle.mid(2);
+        int dashPos = cleanTitle.indexOf(" - ");
+        if (dashPos != -1) cleanTitle = cleanTitle.mid(dashPos + 3);
     }
     lyricsWindow->setTitle(cleanTitle);
 
