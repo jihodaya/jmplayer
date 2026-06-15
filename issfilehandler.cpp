@@ -187,19 +187,35 @@ IssFileHandler::IssData IssFileHandler::loadIssFile(
     for (int i = 0; i < result.lines.size(); ++i)
         qDebug() << "   Line[" << i << "]:" << result.lines[i];
 
+    // 한글 포함 여부 검사 (8x vs 10x 판정)
+    bool hasKorean = false;
+    for (const QString& line : result.lines) {
+        for (const QChar& ch : line) {
+            ushort u = ch.unicode();
+            if ((u >= 0xAC00 && u <= 0xD7A3) || (u >= 0x3130 && u <= 0x318F)) {
+                hasKorean = true;
+                break;
+            }
+        }
+        if (hasKorean) break;
+    }
+    result.tickMultiplier = hasKorean ? 8 : 10;
+    qDebug() << "[IssFileHandler] Detected tick multiplier:" << result.tickMultiplier 
+             << "for" << filePath << "(hasKorean=" << hasKorean << ")";
+
     // ─── 표시용 가사 목록 생성 ──────────────────────────────────
     // 레코드를 순서대로 처리하면서 줄 번호가 바뀌는 시점에 새 항목 추가
     // 시간 공식 (Main.cpp에서 확인):
-    //   ms = kasa_tick * 8 * 60000 / (basicTempo * nTickBeat)
+    //   ms = kasa_tick * tickMultiplier * 60000 / (basicTempo * nTickBeat)
     int prevLineIdx = -1;
-    double msPerTick8 = 60000.0 / (double)(basicTempo * nTickBeat);
+    double msPerTickMultiplier = 60000.0 / (double)(basicTempo * nTickBeat);
 
     for (const SongRec& rec : result.records) {
         if (rec.line >= result.lines.size()) continue;
         if (rec.line != prevLineIdx) {
             result.displayLines.append(result.lines[rec.line]);
             result.displayLineSource.append(rec.line);  // 원본 ISS 줄 번호 보존
-            unsigned long ms = (unsigned long)(rec.kasa_tick * 8 * msPerTick8);
+            unsigned long ms = (unsigned long)(rec.kasa_tick * result.tickMultiplier * msPerTickMultiplier);
             result.displayLineMs.append(ms);
             prevLineIdx = rec.line;
         }

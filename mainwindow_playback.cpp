@@ -596,7 +596,7 @@ void MainWindow::updatePosition()
 
                     // 과거 시점부터 현재 틱 시점까지의 레코드를 순회하며 칠하기 상태를 누적
                     for (const auto& rec : currentIssData.records) {
-                        uint64_t recTick = (uint64_t)rec.kasa_tick * 8;
+                        uint64_t recTick = (uint64_t)rec.kasa_tick * currentIssData.tickMultiplier;
                         if (recTick > imsTick) {
                             // First upcoming record: remember it (and its display line)
                             // so the next line can fade in across the gap.

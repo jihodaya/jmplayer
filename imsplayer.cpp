@@ -556,9 +556,18 @@ bool ImsPlayer::loadFile(const QString &fileName)
             if (hdr.size() >= 70) {
                 uint8_t  nTickBeat    = static_cast<uint8_t>(hdr[36]);  // offset 36
                 uint16_t nBasicTempo  = 0;
-                memcpy(&nBasicTempo, hdr.constData() + 62, 2);           // offset 62
+                memcpy(&nBasicTempo, hdr.constData() + 60, 2);           // offset 60
                 m_nTickBeat  = (nTickBeat  > 0) ? nTickBeat  : 240;
-                m_basicTempo = (nBasicTempo > 0) ? nBasicTempo : 120;
+                if (nBasicTempo > 0) {
+                    m_basicTempo = nBasicTempo;
+                } else {
+                    // 헤더 템포가 0일 경우, AdPlug 플레이어가 로딩 시점에 분석한 실제 재생 주파수(Hz)로부터 템포를 역산합니다.
+                    // Hz = basicTempo * nTickBeat / 60  ->  basicTempo = Hz * 60 / nTickBeat
+                    m_basicTempo = (int)((m_customRefresh * 60.0) / (double)m_nTickBeat + 0.5);
+                    if (m_basicTempo <= 0) m_basicTempo = 120;
+                    qDebug() << "[ImsPlayer] Header tempo is 0! Recalculated from getrefresh():" 
+                             << m_customRefresh << "Hz -> basicTempo =" << m_basicTempo;
+                }
             }
         }
     }

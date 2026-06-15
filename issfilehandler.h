@@ -26,6 +26,7 @@ public:
 
         QStringList lines;          // 전체 가사 줄 목록 (line_count개)
         QList<SongRec> records;     // 원본 레코드 전체
+        int tickMultiplier = 8;
 
         // 가사창에 표시할 줄 목록 (재생 순서대로, 후렴 반복 포함)
         QStringList displayLines;
