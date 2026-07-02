@@ -90,23 +90,30 @@ public:
         QString filenamePart = (firstDash != -1) ? fullText.left(firstDash) : fullText;
         QString titlePart = (firstDash != -1) ? fullText.mid(firstDash) : "";
 
-        // Drawing rectangles
+        // Drawing rectangles. The 130px filename column only matters when a
+        // " - Title - Artist" part follows; otherwise let the filename use the
+        // whole row so it isn't needlessly truncated in a wide window.
         int filenameWidth = 130;
         QRect filenameRect = opt.rect.adjusted(5, 0, 0, 0);
-        filenameRect.setWidth(filenameWidth);
+        if (!titlePart.isEmpty()) {
+            filenameRect.setWidth(filenameWidth);
+        }
         
         QRect titleRect = opt.rect;
         titleRect.setLeft(opt.rect.left() + filenameWidth + 5);
 
         // Set pen color
         painter->setPen(Qt::white);
-        
-        // Draw filename
-        painter->drawText(filenameRect, Qt::AlignLeft | Qt::AlignVCenter, filenamePart);
-        
+
+        // Draw filename (elide with "..." instead of hard pixel clipping: a
+        // clipped 'm' in ".mid" looked like ".r"/".rr" on narrow widths)
+        painter->drawText(filenameRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          opt.fontMetrics.elidedText(filenamePart, Qt::ElideRight, filenameRect.width()));
+
         // Draw title/artist if exists
         if (!titlePart.isEmpty()) {
-            painter->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, titlePart);
+            painter->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter,
+                              opt.fontMetrics.elidedText(titlePart, Qt::ElideRight, titleRect.width()));
         }
 
         painter->restore();
@@ -1873,7 +1880,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player R2.4.e.3";
+    QString title = "🎵 JJoMe MIDI Player v2.4e.4";
     
     if (currentNode) {
         if (currentNode->isFolder) {

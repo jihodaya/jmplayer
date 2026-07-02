@@ -581,6 +581,15 @@ void MidiPlayer::processEvents()
     // Convert elapsed time to MIDI ticks considering tempo changes
     currentTick = calculateCurrentTick(logicalElapsedMs);
 
+    // Keep the member tempo in sync with the tempo map so getCurrentBpm()
+    // reports the real file tempo (it previously stayed at the constructor
+    // default 500000, so the UI showed 120 BPM for every MIDI file).
+    // tempoMap is sorted by tick; take the last change at or before currentTick.
+    for (const auto& tc : tempoMap) {
+        if (tc.tick > currentTick) break;
+        currentTempo = tc.tempo;
+    }
+
     bool anyTrackActive = false;
 
     // Process events in each track
@@ -811,10 +820,22 @@ bool MidiPlayer::parseMidiFile(const QString &filename)
         maxTick = std::max(maxTick, absoluteTick);
     }
 
-    // Sort tempo map
-    std::sort(tempoMap.begin(), tempoMap.end(), [](const TempoChange& a, const TempoChange& b) {
+    // Sort tempo map. MUST be a stable sort: the default 120 BPM entry is pushed
+    // first at tick 0, and files that define their own tempo at tick 0 rely on
+    // "last entry at the same tick wins" in calculateCurrentTick()/duration calc.
+    // std::sort is unstable and (with >16 entries, e.g. 999_GS2.MID's 18 tempo
+    // events) reordered the two tick-0 entries so the 120 BPM default overrode
+    // the file's real tempo -- the whole song played 25% slow (3:26 -> 4:13).
+    std::stable_sort(tempoMap.begin(), tempoMap.end(), [](const TempoChange& a, const TempoChange& b) {
         return a.tick < b.tick;
     });
+
+    // Seed the reported tempo with the file's tempo at tick 0 (last tick-0 entry
+    // wins) so getCurrentBpm() is correct immediately after load, before playback.
+    for (const auto& tc : tempoMap) {
+        if (tc.tick > 0) break;
+        currentTempo = tc.tempo;
+    }
 
     // Calculate total duration using new method
     if (tempoMap.empty()) {
