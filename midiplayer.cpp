@@ -133,6 +133,10 @@ bool MidiPlayer::connectToDevice(int deviceId)
     if (result == MMSYSERR_NOERROR) {
         connected = true;
 
+        // Verification log: which device actually got opened (caps fetched above)
+        qDebug() << "[MidiPlayer] Connected to MIDI device" << deviceId
+                 << QString::fromWCharArray(caps.szPname);
+
         // Initialize all channels to default volume
         for (int channel = 0; channel < 16; channel++) {
             originalChannelVolumes[channel] = 100; // Reset to default
@@ -141,6 +145,29 @@ bool MidiPlayer::connectToDevice(int deviceId)
         return true;
     }
 
+    qWarning() << "[MidiPlayer] midiOutOpen failed for device" << deviceId
+               << QString::fromWCharArray(caps.szPname) << "error" << result;
+    return false;
+}
+
+bool MidiPlayer::connectToDeviceByName(const QString& deviceName)
+{
+    // Look the device up by name in the CURRENT enumeration instead of trusting
+    // a combo-box index captured at startup. With Windows 11's new MIDI stack
+    // (Windows MIDI Services / midisrv active), WinMM device order can change
+    // between app start and connect time, so an index snapshot may open a
+    // different device (typically Microsoft GS Wavetable Synth -> PC speakers)
+    // than the one the user picked.
+    UINT numDevices = midiOutGetNumDevs();
+    for (UINT i = 0; i < numDevices; i++) {
+        MIDIOUTCAPS caps;
+        if (midiOutGetDevCaps(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR) {
+            if (QString::fromWCharArray(caps.szPname) == deviceName) {
+                return connectToDevice((int)i);
+            }
+        }
+    }
+    qWarning() << "[MidiPlayer] MIDI device not found by name:" << deviceName;
     return false;
 }
 

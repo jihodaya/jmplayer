@@ -1372,8 +1372,25 @@ void MainWindow::onDeviceChanged(int index)
             midiPlayer->connectToDevice(-1); // Connect to internal synth
         } else {
             midiPlayer->setUseInternalSynth(false);
-            int actualIndex = index - 1; // Since index 0 is virtual synth
-            midiPlayer->connectToDevice(actualIndex);
+            // Connect by NAME first: on Win11's new MIDI stack the WinMM device
+            // order can differ from the combo snapshot, so index-1 may open the
+            // wrong device (user report: picked MT32-PI, heard GS Wavetable).
+            bool ok = midiPlayer->connectToDeviceByName(deviceName);
+            if (!ok) {
+                int actualIndex = index - 1; // legacy fallback (index 0 is virtual synth)
+                ok = midiPlayer->connectToDevice(actualIndex);
+            }
+            if (!ok) {
+                QMessageBox::warning(this,
+                    LSTR("장치 연결 실패", "Device Connection Failed"),
+                    LSTR("MIDI 장치에 연결하지 못했습니다:\n%1\n\n"
+                         "장치가 켜져 있는지 확인한 후 R 버튼으로 장치 목록을 "
+                         "새로고침하고 다시 선택해 주세요.",
+                         "Failed to connect to the MIDI device:\n%1\n\n"
+                         "Make sure the device is powered on, then press the R "
+                         "button to refresh the device list and select it again.")
+                        .arg(deviceName));
+            }
         }
 
 

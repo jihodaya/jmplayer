@@ -84,6 +84,7 @@ public:
 
     QStringList getAvailableDevices();
     bool connectToDevice(int deviceId);
+    bool connectToDeviceByName(const QString& deviceName);
     void disconnect();
     bool isConnected() const;
     
