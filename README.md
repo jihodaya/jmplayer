@@ -25,7 +25,7 @@ This project requires CMake and Qt6 (MinGW 64-bit).
 
 ```cmd
 # 1. Clone the repository
-git clone https://github.com/yourusername/JMPlayer.git
+git clone https://github.com/jihodaya/jmplayer.git
 cd JMPlayer
 
 # 2. Run the automated release build script (Windows)
@@ -38,6 +38,18 @@ cd JMPlayer
 *   **Project Code:** Released under the Public Domain. Anyone is free to use, modify, and distribute.
 *   **Third-party Dependencies:** Dynamically linked to **Qt 6 (LGPL v3)** and **AdPlug (LGPL v2.1)** to comply with LGPL requirements.
 *   **Credits:** Thanks to **BK (병코돌고래)** for providing the sample song collection (`BK/` folder).
+
+### 🔗 Companion projects
+
+JMPlayer can stream its OPL2/OPL3 register writes to a Raspberry Pi over MIDI —
+the **OPL register tunnel** — so a song played here comes out of the Pi's DAC.
+
+| Project | What it is |
+|---|---|
+| **[mt32-extend](https://github.com/jihodaya/jukebox)** | Bare-metal Raspberry Pi jukebox, and a fork of [mt32-pi](https://github.com/dwhinham/mt32-pi) that receives the tunnel. It gives mt32-pi OPL playback it otherwise has no way to do. |
+| **[rp2040-midi-bridge](https://github.com/jihodaya/rp2040-midi-bridge)** | USB MIDI ↔ serial MIDI bridge for the RP2040, one way to get the stream from the PC to the Pi. |
+
+Neither is required to use JMPlayer on its own.
 
 ---
 
@@ -63,7 +75,7 @@ cd JMPlayer
 
 ```cmd
 # 1. 레포지토리 클론
-git clone https://github.com/yourusername/JMPlayer.git
+git clone https://github.com/jihodaya/jmplayer.git
 cd JMPlayer
 
 # 2. 윈도우용 릴리즈 빌드 자동화 스크립트 실행
@@ -76,3 +88,15 @@ cd JMPlayer
 *   **프로젝트 소스 코드:** 퍼블릭 도메인(Public Domain)으로 배포됩니다. 자유롭게 사용, 수정 및 배포하실 수 있습니다.
 *   **외부 라이브러리:** LGPL 라이선스 준수를 위해 **Qt 6 (LGPL v3)** 및 **AdPlug (LGPL v2.1)** 라이브러리와 동적 링크(DLL) 방식으로 빌드됩니다.
 *   **제공자 기여:** 음원 테스트를 위해 샘플 연주곡 세트(`BK/` 폴더)를 제공해 주신 **BK (병코돌고래)** 님께 감사드립니다.
+
+### 🔗 함께 쓰는 프로젝트
+
+JMPlayer는 OPL2/OPL3 레지스터 쓰기를 MIDI로 라즈베리파이에 흘려보낼 수 있습니다
+(**OPL 레지스터 터널**). 여기서 재생한 곡이 라즈베리파이의 DAC으로 나옵니다.
+
+| 프로젝트 | 설명 |
+|---|---|
+| **[mt32-extend](https://github.com/jihodaya/jukebox)** | 라즈베리파이 베어메탈 쥬크박스와, 터널을 수신하는 [mt32-pi](https://github.com/dwhinham/mt32-pi) 포크. mt32-pi가 원래 못 하던 OPL 재생을 가능하게 합니다. |
+| **[rp2040-midi-bridge](https://github.com/jihodaya/rp2040-midi-bridge)** | USB MIDI ↔ 시리얼 MIDI 브릿지(RP2040). PC에서 파이로 신호를 넘기는 방법 중 하나입니다. |
+
+둘 다 JMPlayer 단독 사용에는 필요하지 않습니다.
