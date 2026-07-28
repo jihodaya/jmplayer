@@ -178,6 +178,11 @@ private:
     int m_basicTempo;
     int m_nTickBeat;
     std::atomic<uint64_t> m_currentTick;
+    // OPL-tunnel song clock (audio thread only): advances samplesPerTick per
+    // sequencer tick, monotonic across songs (never reset - the tunnel
+    // re-anchors on CmdReset). Stamps each tick's register writes so the
+    // jukebox can reproduce the exact tick timing (see OplTunnelSender).
+    double m_tunnelClockSamples = 0.0;
     std::atomic<int> m_userTempoScale;
     std::atomic<int> m_userKeyTranspose;
 
@@ -205,6 +210,16 @@ private:
     char m_cachedVoiceNotes[20][8];
     uint8_t m_cachedVoiceVols[20];
     uint8_t m_cachedVoiceKeyOn[20];
+
+    // Frames rendered since the channel-monitor snapshot was last refreshed.
+    // That snapshot is display-only but expensive (per-voice std::string ->
+    // QString -> CP1361 decode -> QByteArray, i.e. thousands of heap
+    // allocations a second) and it used to run on EVERY audio callback that
+    // advanced a tick. The heap lock it takes is shared with the GUI thread,
+    // so a busy UI stalled the audio thread - and with it the sequencer that
+    // clocks the OPL tunnel. Refreshing it at UI speed instead removes the
+    // contention (2026-07-27).
+    unsigned m_uiSnapshotFrames = 0;
 };
 
 #endif // IMSPLAYER_H

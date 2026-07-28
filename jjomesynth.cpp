@@ -6,6 +6,7 @@
 #include "imsplayer.h"
 #include "gybplayer.h"
 #include "okaplayer.h"
+#include "opltunnelsender.h"
 
 #include <cstring>
 #include <chrono>
@@ -498,6 +499,11 @@ void JJoMeSynth::setOplStereoMode(int mode) {
         mode = 1;
     }
     m_oplStereoMode.store(mode, std::memory_order_release);
+
+    // OPL tunnel (2026-07-16): the receiver (mt32-pi fork) applies its OWN pan
+    // policy to the ORIGINAL 0xC0 values jmp ships - tell it which of jmp's
+    // 9 virtual-stereo patterns to use so the Pi mix follows this setting.
+    OplTunnelSender::instance().setStereoMode(mode);
 
     // 1~9번에 대응하는 Panning 맵 정의
     static const char* MAPS[] = {

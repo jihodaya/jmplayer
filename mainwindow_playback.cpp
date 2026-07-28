@@ -60,6 +60,30 @@
 #include <dwmapi.h>
 
 
+// JJoMeSynth (the miniaudio host that drives Ims/Gyb/OkaPlayer's renderAudio
+// callbacks) used to be lazily initialized ONLY in the IMS branch of
+// playPause() - so on a fresh launch, playing a GYB/OKA FIRST produced no
+// audio callback at all: no sequencer ticks, no local sound, and nothing on
+// the OPL tunnel ("mt32-pi 모드에서 GYB가 IMS를 한 번 재생한 후부터만 연주됨",
+// 2026-07-16). Every OPL-engine branch now calls this before play().
+void MainWindow::ensureJJoMeSynthReady()
+{
+    if (JJoMeSynth::instance().isInitialized())
+        return;
+
+    SettingsManager& settings = SettingsManager::instance();
+    QString sfPath = settings.value("Synth/SoundFontPath", "").toString();
+    if (sfPath.isEmpty() || !QFileInfo::exists(sfPath)) {
+        QDir sfDir(QApplication::applicationDirPath() + "/SoundFonts");
+        if (sfDir.exists()) {
+            QStringList filters; filters << "*.sf2" << "*.sf3";
+            QFileInfoList fileList = sfDir.entryInfoList(filters, QDir::Files);
+            if (!fileList.isEmpty()) sfPath = fileList.first().absoluteFilePath();
+        }
+    }
+    if (!sfPath.isEmpty()) JJoMeSynth::instance().initialize(sfPath);
+}
+
 void MainWindow::playPause()
 {
     // Skip MIDI device check - allow playback without device
@@ -182,12 +206,13 @@ void MainWindow::playPause()
             if (isGybFile) {
                 // GYB uses OPL just like IMS. External BNK support is enabled.
                 qDebug() << "[MainWindow] Starting GYB playback";
+                ensureJJoMeSynthReady();
                 JJoMeSynth::instance().setGybPlayer(gybPlayer);
                 JJoMeSynth::instance().setImsPlayer(nullptr);
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
                 gybPlayer->play();
                 qDebug() << "[MainWindow] GYB play() called";
-                dspButton->show(); bankButton->show();
+                dspButton->show(); bankButton->show(); oplTunnelButton->show();
                 updateDspButtonStyle();
                 if (channelMonitor) {
                     channelMonitor->setImsMode(true, gybPlayer->getBankName(),
@@ -214,7 +239,7 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setImsPlayer(imsPlayer);
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
                 imsPlayer->play();
-                dspButton->show(); bankButton->show();
+                dspButton->show(); bankButton->show(); oplTunnelButton->show();
                 updateDspButtonStyle(); // Update style
                 if (channelMonitor) {
                     channelMonitor->setImsMode(true, imsPlayer->getBankName(), imsPlayer->getInstruments(), QFileInfo(currentFile).suffix().toUpper());
@@ -222,11 +247,12 @@ void MainWindow::playPause()
                 }
             } else if (playOkaViaOpl) {
                 qDebug() << "[MainWindow] Starting OKA OPL playback";
+                ensureJJoMeSynthReady();
                 JJoMeSynth::instance().setGybPlayer(nullptr);
                 JJoMeSynth::instance().setImsPlayer(nullptr);
                 JJoMeSynth::instance().setOkaPlayer(okaPlayer);
                 okaPlayer->play();
-                dspButton->show(); bankButton->show();
+                dspButton->show(); bankButton->show(); oplTunnelButton->show();
                 updateDspButtonStyle();
                 if (channelMonitor) {
                     channelMonitor->setImsMode(true, okaPlayer->getBankName(),
@@ -238,7 +264,7 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setImsPlayer(nullptr);
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
                 midiPlayer->play();
-                dspButton->hide(); bankButton->hide();
+                dspButton->hide(); bankButton->hide(); oplTunnelButton->hide();
                 if (channelMonitor) channelMonitor->setImsMode(false);
             }
             setPlaying(true);
@@ -431,9 +457,21 @@ void MainWindow::onVolumeChanged(int value)
     JJoMeSynth::instance().setVolume(value / 127.0f);
     volumeValue->setText(QString::number(value));
 
-    // Save volume setting immediately
-    SettingsManager& settings = SettingsManager::instance();
-    settings.setValue("General/volume", value);
+    // Persist once the slider settles, not on every step. A drag or a spin of
+    // the mouse wheel emits valueChanged dozens of times per second, and each
+    // one used to dirty QSettings, whose event-loop sync rewrites the whole INI
+    // file on the GUI thread. Volume is written again by saveSettings() on
+    // exit, so all this timer risks is losing the last change to a hard kill -
+    // hence a short delay rather than dropping the write entirely.
+    if (!volumeSaveTimer) {
+        volumeSaveTimer = new QTimer(this);
+        volumeSaveTimer->setSingleShot(true);
+        volumeSaveTimer->setInterval(400);
+        connect(volumeSaveTimer, &QTimer::timeout, this, [this]() {
+            SettingsManager::instance().setValue("General/volume", volumeSlider->value());
+        });
+    }
+    volumeSaveTimer->start();
 }
 
 void MainWindow::onPositionChanged(int value)
@@ -1069,7 +1107,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
         gybPlayer->play();
-        dspButton->show(); bankButton->show();
+        dspButton->show(); bankButton->show(); oplTunnelButton->show();
         updateDspButtonStyle();
         if (channelMonitor)
             channelMonitor->setImsMode(true, gybPlayer->getBankName(),
@@ -1079,7 +1117,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setImsPlayer(imsPlayer);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
         imsPlayer->play();
-        dspButton->show(); bankButton->show();
+        dspButton->show(); bankButton->show(); oplTunnelButton->show();
         updateDspButtonStyle();
         if (channelMonitor)
             channelMonitor->setImsMode(true, imsPlayer->getBankName(),
@@ -1090,7 +1128,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(okaPlayer);
         okaPlayer->play();
-        dspButton->show(); bankButton->show();
+        dspButton->show(); bankButton->show(); oplTunnelButton->show();
         updateDspButtonStyle();
         if (channelMonitor)
             channelMonitor->setImsMode(true, okaPlayer->getBankName(),
@@ -1100,7 +1138,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
         midiPlayer->play();
-        dspButton->hide(); bankButton->hide();
+        dspButton->hide(); bankButton->hide(); oplTunnelButton->hide();
         if (channelMonitor) channelMonitor->setImsMode(false);
     }
 
@@ -1206,10 +1244,12 @@ void MainWindow::onFileSelected()
 
         if (isGyb || isIms || isOka) {
             dspButton->show();
+            oplTunnelButton->show();
             bankButton->show();
             updateDspButtonStyle();
         } else {
             dspButton->hide();
+            oplTunnelButton->hide();
             bankButton->hide();
             if (channelMonitor) {
                 channelMonitor->setImsMode(false);

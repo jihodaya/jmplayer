@@ -141,6 +141,28 @@ if(EXISTS ${COMPOSER_CPP_PATH})
     endif()
 endif()
 
+# Reset the rhythm register cache in CcomposerBackend::rewind().
+#
+# rewind() resets every other cache and calls opl->init(), but it leaves
+# mAMVibRhythmCache alone. Once a song has hit a drum, that cache still holds
+# the drum key-on bits, so the next SetRhythmMode(1) writes them straight back
+# to the just-reset chip: 0xBD gets 0x3B (rhythm on + cymbal + hi-hat + snare +
+# bass drum) instead of 0x20, and all four drums fire at once. That is the loud
+# "칭~" heard when the SAME song is stopped and played again, while switching
+# songs was always clean - switching builds a new player object, whose
+# constructor zeroes the cache. Diagnosed 2026-07-27 by rendering ZOOM01.IMS
+# twice offline and diffing the emulated chip state; the pending 0xBD write was
+# the only difference. mRhythmMode is reset too, since init() has just put the
+# chip back in melodic mode.
+if(EXISTS ${COMPOSER_CPP_PATH})
+    file(READ ${COMPOSER_CPP_PATH} COMPOSER_CPP_CONTENT)
+    string(FIND "${COMPOSER_CPP_CONTENT}" "mAMVibRhythmCache = 0;" HAS_COMP_RHYTHM_RESET)
+    if(HAS_COMP_RHYTHM_RESET EQUAL -1)
+        string(REPLACE "opl->init();         // initialize to melodic by default" "opl->init();         // initialize to melodic by default\n    mAMVibRhythmCache = 0;   // drop drum key-on bits left by the previous run\n    mRhythmMode       = 0;   // init() put the chip back in melodic mode" COMPOSER_CPP_CONTENT "${COMPOSER_CPP_CONTENT}")
+        file(WRITE ${COMPOSER_CPP_PATH} "${COMPOSER_CPP_CONTENT}")
+    endif()
+endif()
+
 # Source files
 set(SOURCES
     main.cpp
@@ -168,6 +190,9 @@ set(SOURCES
     pianorollwindow.cpp
     playlistmodel.cpp
     oplstereodialog.cpp
+    opltunnelsender.cpp
+    midireset/midireset.cpp
+    midireset/midiresetdialog.cpp
 )
 
 set(HEADERS

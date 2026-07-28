@@ -1,6 +1,7 @@
 #include "midiplayer.h"
 #include "nobfilehandler.h"
 #include "okafilehandler.h"
+#include "opltunnelsender.h" // to stay off the wire while the OPL tunnel owns it
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
@@ -29,6 +30,14 @@ MidiPlayer::MidiPlayer(QObject *parent)
     // Enable high-resolution precision timer for Windows MIDI synchronization
     timeBeginPeriod(1);
     m_elapsedTimer.start();
+
+    // Sound-module reset before each new song (midireset/midireset.h): route
+    // its SysEx through our own device send, and let it pace multi-message
+    // resets with a real sleep (only matters for slow hardware synths).
+    m_midiReset.SetSendCallback([this](const std::vector<uint8_t>& data) {
+        sendSysExMessage(data);
+    });
+    m_midiReset.SetSleepFunction([](unsigned ms) { QThread::msleep(ms); });
 
     // Create and configure playback thread
     playbackThread = new PlaybackThread(this);
@@ -88,7 +97,7 @@ QStringList MidiPlayer::getAvailableDevices()
 bool MidiPlayer::connectToDevice(int deviceId)
 {
     if (connected) {
-        disconnect();
+        disconnect(false);
     }
 
     if (deviceId == -1) {
@@ -171,7 +180,7 @@ bool MidiPlayer::connectToDeviceByName(const QString& deviceName)
     return false;
 }
 
-void MidiPlayer::disconnect()
+void MidiPlayer::disconnect(bool async)
 {
     HMIDIOUT localHMidiOut = nullptr;
     HANDLE localSysExEvent = nullptr;
@@ -206,16 +215,22 @@ void MidiPlayer::disconnect()
         }
     }
 
-    // Perform heavy Windows Multimedia API cleanup asynchronously in a background thread.
-    // This prevents UI freezing (kernel lock contention) with miniaudio's device stream.
+    // Perform heavy Windows Multimedia API cleanup.
+    // Asynchronously in a background thread to prevent UI freezing (kernel lock contention) with miniaudio's device stream,
+    // OR synchronously when changing devices to avoid MMSYSERR_ALLOCATED.
     if (localHMidiOut) {
-        QThread* cleanupThread = QThread::create([localHMidiOut]() {
+        if (async) {
+            QThread* cleanupThread = QThread::create([localHMidiOut]() {
+                midiOutReset(localHMidiOut);
+                QThread::msleep(50);
+                midiOutClose(localHMidiOut);
+            });
+            connect(cleanupThread, &QThread::finished, cleanupThread, &QObject::deleteLater);
+            cleanupThread->start();
+        } else {
             midiOutReset(localHMidiOut);
-            QThread::msleep(50);
-            midiOutClose(localHMidiOut);
-        });
-        connect(cleanupThread, &QThread::finished, cleanupThread, &QObject::deleteLater);
-        cleanupThread->start();
+            midiOutClose(localHMidiOut); // Sync close to free device immediately
+        }
     }
 
     if (localSysExEvent) {
@@ -359,8 +374,16 @@ void MidiPlayer::play()
         paused = false;
     } else {
         resetPlayback();
-        playbackStartTime = m_elapsedTimer.elapsed();
         currentTick = 0;
+
+        // Reset the external sound module BEFORE this song's own events start,
+        // so no leftover instrument/pan/reverb/tuning state from the previous
+        // song bleeds into it (midireset/midireset.h; no-op when disabled or
+        // when playing to the internal synth). Only for a genuine new-song
+        // start (the paused branch above skips it - a resume must not wipe the
+        // state the paused song had already established).
+        if (!m_useInternalSynth)
+            m_midiReset.SendResets();
 
         // Reset channel state including mute settings
         initializeChannelState();
@@ -369,6 +392,20 @@ void MidiPlayer::play()
         for (int channel = 0; channel < 16; channel++) {
             originalChannelVolumes[channel] = 100;
         }
+
+        // Start the clock only NOW, after every pre-roll message is out.
+        //
+        // It used to be taken before SendResets(), which blocks until the
+        // driver reports each SysEx as sent (and, with a settle delay
+        // configured, sleeps on top of that). All of that time was then
+        // counted as song time already elapsed, so the playback thread woke up
+        // "behind" and fired everything scheduled inside that window at once -
+        // the song's opening was compressed and the beat came out wrong, but
+        // only with the reset feature switched on. Reported by a user
+        // (알로에, 2026-07-27) on a file whose intro is sparse enough that the
+        // displaced first notes are plainly audible; a busy intro hides it,
+        // which is why it looked file-specific.
+        playbackStartTime = m_elapsedTimer.elapsed();
     }
 
     playing = true;
@@ -1019,7 +1056,17 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
             // Wait for the message to be sent using Event
             WaitForSingleObject(m_sysExEvent, 200); // 200ms timeout
         }
-        midiOutUnprepareHeader(hMidiOut, &midiHeader, sizeof(MIDIHDR));
+        // NEVER unprepare a buffer the driver is still transmitting - that
+        // truncates the SysEx mid-stream (the receiver sees a corrupted
+        // message and drops it). Large OPL-tunnel SysEx over the 31250-baud
+        // link can legitimately take >200ms end-to-end, so if the wait timed
+        // out keep retrying while the driver says MIDIERR_STILLPLAYING.
+        for (int tries = 0; tries < 40; ++tries) { // <= ~2s
+            result = midiOutUnprepareHeader(hMidiOut, &midiHeader, sizeof(MIDIHDR));
+            if (result != MIDIERR_STILLPLAYING)
+                break;
+            Sleep(50);
+        }
     }
 }
 
@@ -1027,6 +1074,19 @@ void MidiPlayer::updateVolumeToDevice()
 {
     QMutexLocker locker(&stateMutex);
     if (!connected || (!hMidiOut && !m_useInternalSynth)) return;
+
+    // While the OPL register tunnel is running, the MIDI port IS the tunnel's
+    // link (jmp -> Pico -> mt32-pi, one 31250 baud wire). Blasting 16 CC#7
+    // messages down it buys nothing - the receiving COplTunnelSynth's
+    // HandleMIDIShortMessage() is an empty function, so every one of them is
+    // discarded - while costing 48 bytes = ~15 ms of wire time that the OPL
+    // batches then have to wait behind. That delay is enough to push the
+    // receiver's scheduling anchor past its cushion, which is why the sound
+    // audibly falters exactly while the volume slider is being moved
+    // (2026-07-27). Local output is muted during tunnelling anyway, so nothing
+    // is lost by staying quiet here; ordinary MIDI playback is untouched.
+    if (!m_useInternalSynth && OplTunnelSender::instance().isEnabled())
+        return;
 
     // Send volume update to all channels based on their original values
     for (int channel = 0; channel < 16; channel++) {

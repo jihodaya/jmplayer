@@ -12,7 +12,7 @@ REM ========================================
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player R2.4e  (English UI)
+echo JJoMe MIDI Player R2.5  (English UI)
 echo License-Compliant Build Script
 echo ========================================
 echo.
@@ -90,7 +90,7 @@ if exist IMS\STANDARD.BNK (
 
 
 echo [5/5] Creating directory structure for release...
-copy build_eng\MidiPlayer.exe release_eng\JMPlayer_R2.4e_ENG.exe
+copy build_eng\MidiPlayer.exe release_eng\JMPlayer_R2.5_ENG.exe
 copy K_icon.ico release_eng\K_icon.ico
 if exist SoundFonts xcopy SoundFonts release_eng\SoundFonts /E /I /Y
 if exist BK xcopy BK release_eng\BK /E /I /Y
@@ -109,7 +109,7 @@ echo.
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
 cd /D %~dp0release_eng
-windeployqt JMPlayer_R2.4e_ENG.exe --release --no-translations --no-opengl-sw
+windeployqt JMPlayer_R2.5_ENG.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
@@ -126,12 +126,12 @@ echo BUILD COMPLETED SUCCESSFULLY!  (English UI)
 echo ========================================
 echo.
 echo Release folder: .\release_eng\
-echo Executable: .\release_eng\JMPlayer_R2.4e_ENG.exe
+echo Executable: .\release_eng\JMPlayer_R2.5_ENG.exe
 echo Icon: .\release_eng\K_icon.ico
 echo.
 
-if exist release_eng\JMPlayer_R2.4e_ENG.exe (
-    for %%A in (release_eng\JMPlayer_R2.4e_ENG.exe) do (
+if exist release_eng\JMPlayer_R2.5_ENG.exe (
+    for %%A in (release_eng\JMPlayer_R2.5_ENG.exe) do (
         echo Executable size: %%~zA bytes
     )
 )

@@ -17,6 +17,7 @@
 #include <fstream>
 #include <sstream>
 #include "jjomesynth.h"
+#include "midireset/midireset.h"
 
 #pragma comment(lib, "winmm.lib")
 
@@ -85,9 +86,19 @@ public:
     QStringList getAvailableDevices();
     bool connectToDevice(int deviceId);
     bool connectToDeviceByName(const QString& deviceName);
-    void disconnect();
+    void disconnect(bool async = true);
     bool isConnected() const;
-    
+
+    // Public raw-SysEx send for the OPL register tunnel (opltunnelsender.cpp).
+    // Called from the tunnel's sender thread; forwards to the private
+    // sendSysExMessage (midiOutLongMsg to the connected device).
+    void sendRawSysEx(const std::vector<unsigned char> &data) { sendSysExMessage(data); }
+
+    // Sound-module reset before each new song (see midireset/midireset.h).
+    // MainWindow reads/writes these to wire the settings UI; the actual send
+    // happens inside play()'s new-song branch.
+    MidiReset& midiReset() { return m_midiReset; }
+
     // Internal Synth setting
     void setUseInternalSynth(bool useInternal, const QString& soundFontPath = QString());
     bool isUsingInternalSynth() const { return m_useInternalSynth; }
@@ -233,6 +244,10 @@ private:
 
     // Internal Synth Support
     bool m_useInternalSynth = false;
+
+    // Sound-module reset before each new song (midireset/midireset.h). Wired
+    // to sendRawSysEx in the constructor; sent from play()'s new-song branch.
+    MidiReset m_midiReset;
     QString m_currentSoundFontPath;
 
     int m_userKeyTranspose;

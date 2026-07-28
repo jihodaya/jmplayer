@@ -7,6 +7,7 @@
 #include "constants.h"
 #include "settingsmanager.h"
 #include "oplstereodialog.h"
+#include "midireset/midiresetdialog.h"
 #include <QCloseEvent>
 #include "nobfilehandler.h"
 #include "gybfilehandler.h"
@@ -16,6 +17,10 @@
 #include "soundfontmanagerdialog.h"
 #include "imsplayer.h"
 #include "gybplayer.h"
+#include "opltunnelsender.h"
+#include <QShortcut>
+#include <QToolTip>
+#include <QCursor>
 #include <QApplication>
 #include <QStatusBar>
 #include <QDateTime>
@@ -172,6 +177,29 @@ MainWindow::MainWindow(QWidget *parent)
     imsPlayer = new ImsPlayer(this);
     gybPlayer = new GybPlayer(this);
     okaPlayer = new OkaPlayer(this);
+
+    // OPL register tunnel (M2, IMS/ROL/SOP): stream jmp's OPL writes to the
+    // bare-metal jukebox over the selected MIDI device. The sender thread calls
+    // this to actually ship each SysEx. Toggle it with Ctrl+Shift+O (temporary
+    // control; a toolbar button follows in M3). Enable it BEFORE (or restart)
+    // an OPL song so the jukebox gets the reset + full register stream.
+    OplTunnelSender::instance().setSendCallback(
+        [this](const std::vector<unsigned char>& data) {
+            if (midiPlayer)
+                midiPlayer->sendRawSysEx(data);
+        });
+    {
+        // Ctrl+Shift+O = the same toggle as the PI button next to DSP (M3);
+        // both go through toggleOplTunnel() so the persisted setting and the
+        // button style always stay in sync.
+        QShortcut* oplTunnelToggle = new QShortcut(QKeySequence("Ctrl+Shift+O"), this);
+        connect(oplTunnelToggle, &QShortcut::activated, this, &MainWindow::toggleOplTunnel);
+
+        // (M2 bring-up diagnostic - "[OPL> N w/s, drop N]" in the window
+        // title - removed 2026-07-15 per user request once the tunnel was
+        // confirmed working. sentCount()/droppedCount() remain available if
+        // it's ever needed again.)
+    }
     positionTimer = new QTimer(this);
     channelUpdateTimer = new QTimer(this);
     windowPositionTimer = new QTimer(this);
@@ -214,6 +242,13 @@ MainWindow::MainWindow(QWidget *parent)
         HWND hwnd = (HWND)winId();
         BOOL value = TRUE;
         ::DwmSetWindowAttribute(hwnd, 20, &value, sizeof(value)); // DWMWA_USE_IMMERSIVE_DARK_MODE
+
+        // Title-bar TEXT color: force white (user request - the default dark-
+        // mode caption text reads as gray, especially while the window is
+        // inactive). DWMWA_TEXT_COLOR (36) needs Windows 11 22000+; on older
+        // builds the call just fails harmlessly and the default stays.
+        COLORREF textColor = RGB(255, 255, 255);
+        ::DwmSetWindowAttribute(hwnd, 36, &textColor, sizeof(textColor)); // DWMWA_TEXT_COLOR
     }
     #endif
 
@@ -555,6 +590,17 @@ void MainWindow::setupUI()
     dspButton->setToolTip("Toggle Analog Simulation (LPF/Saturation)");
     dspButton->hide(); // Initially hidden, only shown for OPL files
 
+    // Create OPL tunnel button (M3): streams OPL register writes to the
+    // bare-metal jukebox over the selected MIDI device. Shown/hidden together
+    // with the DSP button (OPL files only), state persisted in settings.
+    oplTunnelButton = new QPushButton("OUT", this);
+    oplTunnelButton->setFocusPolicy(Qt::NoFocus);
+    oplTunnelButton->setFixedSize(40, 26);
+    oplTunnelButton->setToolTip(LSTR("OPL 터널: OPL 레지스터를 선택된 MIDI 장치(쥬크박스)로 전송 (Ctrl+Shift+O)",
+                                     "OPL tunnel: stream OPL registers to the selected MIDI device (jukebox) (Ctrl+Shift+O)"));
+    oplTunnelButton->hide(); // Initially hidden, only shown for OPL files
+    updateOplTunnelButtonStyle();
+
     // Create Roll button
     rollButton = new QPushButton("🎹", this);
     rollButton->setFocusPolicy(Qt::NoFocus);
@@ -693,6 +739,7 @@ void MainWindow::setupUI()
 
     positionLayout->addWidget(positionLabel);
     positionLayout->addStretch();
+    positionLayout->addWidget(oplTunnelButton); // OUT before DSP (user request)
     positionLayout->addWidget(dspButton);
     positionLayout->addWidget(bankButton);
     positionLayout->addWidget(rollButton);
@@ -915,6 +962,7 @@ void MainWindow::connectSignals()
     connect(channelButton, &QPushButton::clicked, this, &MainWindow::toggleChannelMonitor);
     connect(lyricsButton, &QPushButton::clicked, this, &MainWindow::toggleLyricsWindow);
     connect(dspButton, &QPushButton::clicked, this, &MainWindow::toggleDsp);
+    connect(oplTunnelButton, &QPushButton::clicked, this, &MainWindow::toggleOplTunnel);
     connect(rollButton, &QPushButton::clicked, this, &MainWindow::togglePianoRoll);
     connect(bankButton, &QPushButton::clicked, this, &MainWindow::onSelectBankFile);
     connect(repeatModeButton, &QPushButton::clicked, this, &MainWindow::onRepeatModeChanged);
@@ -1191,6 +1239,25 @@ void MainWindow::loadSettings()
     int oplStereoMode = settings.value("Synth/OplStereoMode", 1).toInt();
     JJoMeSynth::instance().setOplStereoMode(oplStereoMode);
 
+    // OPL tunnel (M3): restore the persisted on/off state. setEnabled(true)
+    // arms a CmdReset+snapshot resync, so enabling before any song is loaded
+    // is safe - the jukebox chip gets rebuilt whenever the stream starts.
+    const bool oplTunnelOn = settings.value("Synth/OplTunnel", false).toBool();
+    OplTunnelSender::instance().setEnabled(oplTunnelOn);
+    updateOplTunnelButtonStyle();
+
+    // Sound-module reset before each new song (midireset/midireset.h). Off by
+    // default (unchanged behaviour); when on, the default GM+GS pair suits this
+    // project's mt32-pi target. Delay 0 = fine for software targets; a few ms
+    // helps slow hardware synths.
+    if (midiPlayer) {
+        midiPlayer->midiReset().SetEnabled(settings.value("Midi/ResetEnabled", false).toBool());
+        midiPlayer->midiReset().SetFlags(settings.value("Midi/ResetFlags",
+                                         (unsigned)MidiReset::DefaultGMGS).toUInt());
+        midiPlayer->midiReset().SetInterMessageDelayMs(
+            settings.value("Midi/ResetDelayMs", MidiReset::DefaultDelayMs).toUInt());
+    }
+
     repeatMode = settings.value("General/repeatMode", 0).toInt();
     // Update button text based on loaded mode (without incrementing)
     switch (repeatMode) {
@@ -1318,6 +1385,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
         playlistSaveTimer->stop();
         savePlaylistTree();
     }
+    if (volumeSaveTimer && volumeSaveTimer->isActive())
+        volumeSaveTimer->stop(); // saveSettings() below writes the current value anyway
     saveSettings();
     event->accept();
 }
@@ -1652,6 +1721,19 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             return true;
         }
 
+        if (keyEvent->key() == Qt::Key_F6) {
+            // Sound-module reset settings (midireset/midiresetdialog.h).
+            static bool isMidiResetOpen = false;
+            if (isMidiResetOpen) return true;
+            isMidiResetOpen = true;
+            if (midiPlayer) {
+                MidiResetDialog dlg(&midiPlayer->midiReset(), this);
+                dlg.exec(); // dialog persists settings + applies live on OK
+            }
+            isMidiResetOpen = false;
+            return true;
+        }
+
         if (keyEvent->key() == Qt::Key_F12) {
             static bool isOplStereoOpen = false;
             if (isOplStereoOpen) return true;
@@ -1880,7 +1962,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.4e.5";
+    QString title = "🎵 JJoMe MIDI Player v2.5";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -1995,6 +2077,49 @@ void MainWindow::updateDspButtonStyle()
     
     dspButton->setText(text);
     dspButton->setStyleSheet(style);
+}
+
+void MainWindow::toggleOplTunnel()
+{
+    const bool on = !OplTunnelSender::instance().isEnabled();
+    OplTunnelSender::instance().setEnabled(on);
+    SettingsManager::instance().setValue("Synth/OplTunnel", on);
+    updateOplTunnelButtonStyle();
+
+    const QString msg = on
+        ? LSTR("OPL 터널 ON — 선택된 MIDI 장치(쥬크박스)로 OPL 전송",
+               "OPL tunnel ON - streaming OPL to the selected MIDI device")
+        : LSTR("OPL 터널 OFF", "OPL tunnel OFF");
+    // Non-intrusive feedback (no status bar in this window's layout).
+    QToolTip::showText(QCursor::pos(), msg, this);
+    qDebug() << "[OplTunnel]" << (on ? "ON" : "OFF");
+}
+
+void MainWindow::updateOplTunnelButtonStyle()
+{
+    if (!oplTunnelButton)
+        return;
+
+    const bool on = OplTunnelSender::instance().isEnabled();
+
+    // Same sizing/baseline as the DSP button so the pair reads as one group.
+    const QString baseStyle =
+        "QPushButton { font-weight: bold; border-radius: 3px; padding: 0px; margin: 0px; "
+        "min-height: 26px; max-height: 26px; color: white; font-size: 11px; } ";
+    QString style;
+    if (on) {
+        // Active: teal - distinct from every DSP level color (blue/orange/
+        // magenta) so the two buttons' states read at a glance.
+        style = baseStyle +
+            "QPushButton { border: 2px solid #00a5b5; background-color: #007c8a; } "
+            "QPushButton:hover { background-color: #00a5b5; border: 2px solid #33c9d9; }";
+    } else {
+        style = baseStyle +
+            "QPushButton { border: 2px solid #666666; background-color: #3a3a3a; color: #888888; } "
+            "QPushButton:hover { background-color: #4a4a4a; border: 2px solid #0078d4; }";
+    }
+    oplTunnelButton->setText("OUT");
+    oplTunnelButton->setStyleSheet(style);
 }
 
 
@@ -2123,6 +2248,7 @@ void MainWindow::showHelpDialog()
         "<tr><td><b>F9</b></td><td>Key transpose -1 semitone (min -6, all formats)</td></tr>"
         "<tr><td><b>F10</b></td><td>Key transpose +1 semitone (max +6, all formats)</td></tr>"
         "<tr><td><b>F11</b></td><td>Reset tempo &amp; key to the original speed/pitch</td></tr>"
+        "<tr><td><b>F6</b></td><td>Sound-module reset settings (reset the device on each new song)</td></tr>"
         "<tr><td><b>F12</b></td><td>Open the OPL-like stereo &amp; performance mode settings (1-9)</td></tr>"
         "</table>"
         "<br/>"
@@ -2151,6 +2277,7 @@ void MainWindow::showHelpDialog()
         "<tr><td><b>F9</b></td><td>연주 음정(Key Transpose) 1음 감소 (최소 -6, 전 포맷 지원)</td></tr>"
         "<tr><td><b>F10</b></td><td>연주 음정(Key Transpose) 1음 증가 (최대 +6, 전 포맷 지원)</td></tr>"
         "<tr><td><b>F11</b></td><td>변경된 템포 및 연주 키를 원곡 속도/음정으로 초기화 (템포/키 변경 지원)</td></tr>"
+        "<tr><td><b>F6</b></td><td>음원 리셋 설정 (곡을 새로 재생할 때 장치를 리셋)</td></tr>"
         "<tr><td><b>F12</b></td><td>OPL 유사 스테레오 및 연주모드 설정 창 열기 (1~9)</td></tr>"
         "</table>"
         "<br/>"

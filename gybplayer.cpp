@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include "jjomesynth.h"
+#include "opltunnelsender.h" // OPL register tunnel to the bare-metal jukebox
 
 // InterceptingOpl — write side-effect capture for the channel monitor.
 // Mirrors ImsPlayer::InterceptingOpl so GYB's voice/instrument level meters
@@ -61,6 +62,11 @@ public:
     }
 
     void init() override {
+        // OPL tunnel: tell the jukebox to reset+OPL3-enable its own chip. The
+        // 512-write deep reset below stays LOCAL (redundant with the jukebox's
+        // OPL3_Reset, and ~0.5s of serial at 31250) - same as ImsPlayer.
+        OplTunnelSender::instance().reset();
+
         CNemuopl::init();
         for (int i = 0x00; i <= 0xFF; ++i) {
             CNemuopl::write(i, 0);
@@ -69,6 +75,14 @@ public:
         CNemuopl::write(0x101, 0x20);
         CNemuopl::write(0x105, 0x01); // OPL3 Mode Enable (Bit 0 = 1, required for stereo)
         clearInternal();
+    }
+
+    // Local chip write + tunnel to the jukebox (no-op when the tunnel is off).
+    // 9-bit tunnel register = (currChip<<8)|reg, same as CNemuopl::write forms.
+    inline void tunnelChipWrite(int reg, int val) {
+        CNemuopl::write(reg, val);
+        OplTunnelSender::instance().queueWrite(
+            (uint16_t)(((getchip() & 1) << 8) | (reg & 0x1FF)), (uint8_t)val);
     }
     void clearInternal() {
         memset(m_keyOn, 0, 18 * sizeof(bool));
@@ -95,9 +109,17 @@ public:
             int ch = bankOffset + (baseReg - 0xC0);
             if (ch < 18) {
                 originalPanReg[ch] = val; // Store original register value
+                // OPL tunnel: ship the ORIGINAL (pre-pan) value - the jukebox
+                // applies its own virtual-stereo policy (same as its file
+                // playback). jmp's pan map stays local. See ImsPlayer's 0xC0
+                // intercept for the full rationale.
+                OplTunnelSender::instance().queueWrite(
+                    (uint16_t)(((getchip() & 1) << 8) | (reg & 0x1FF)), (uint8_t)val);
                 int panBit = JJoMeSynth::instance().getChannelPanBit(ch);
                 val &= ~0x30;
                 val |= panBit;
+                CNemuopl::write(reg, val); // local chip only - jmp's own stereo
+                return;
             }
         }
 
@@ -142,7 +164,7 @@ public:
             if (ch < 18) m_regB[ch] = val;
         }
 
-        CNemuopl::write(reg, val);
+        tunnelChipWrite(reg, val);
 
         if (baseReg >= 0xB0 && baseReg <= 0xB8) {
             int ch = bankOffset + (baseReg - 0xB0);
@@ -179,6 +201,20 @@ public:
     }
 
 public:
+    // Release every sounding voice without disturbing instrument setup, so a
+    // paused song resumes cleanly (2026-07-27; see ImsPlayer's identical
+    // silenceAllVoices - fixes the "칭~" swell on resume, locally and over the
+    // mt32-pi OPL tunnel). Clears key-on bit 5 of B0-B8 (both banks) and the
+    // 0xBD drum key bits; goes through write() so the tunnel carries it too.
+    void silenceAllVoices() {
+        for (int ch = 0; ch < 18; ++ch) {
+            const int bank = (ch >= 9) ? 0x100 : 0;
+            write(bank + 0xB0 + (ch % 9), m_regB[ch] & ~0x20);
+        }
+        if (m_drumMode)
+            write(0xBD, 0x20); // keep rhythm mode on, clear the 5 drum key bits
+    }
+
     int originalPanReg[18];
 private:
     bool* m_keyOn;
@@ -243,6 +279,12 @@ bool GybPlayer::loadFile(const QString& fileName)
     // rate at each tick. Using a single end-of-song refresh would massively
     // overshoot duration for songs with global slow-down events (POET, LOVEIS
     // fade-out, etc.) and make the progress bar look frozen.
+    // OPL tunnel: this duration scan runs the WHOLE SONG through the REAL
+    // m_opl (unlike ImsPlayer, which scans on a dummy chip) - suppress the
+    // wire for the scan or loading a GYB floods the 31250-baud link with the
+    // entire song's register writes. Unsuppress AFTER the final rewind so the
+    // resync snapshot ships the clean song-start state.
+    OplTunnelSender::instance().setSuppressed(true);
     m_backend->rewind(0);
     unsigned long totalTicks = 0;
     double totalMs = 0.0;
@@ -255,6 +297,7 @@ bool GybPlayer::loadFile(const QString& fileName)
     }
     m_duration = (unsigned long)totalMs;
     m_backend->rewind(0);
+    OplTunnelSender::instance().setSuppressed(false);
 
     m_title    = m_backend->title();
     m_bankName = m_backend->bankName();
@@ -298,17 +341,30 @@ void GybPlayer::play()
         return;
     }
     std::lock_guard<std::mutex> lock(m_playerMutex);
-    m_needsFadeIn.store(true);
-    m_fadeCounter.store(0);
     if (!m_playing.load()) {
         m_playing.store(true);
     }
 }
 
-void GybPlayer::pause() { m_playing.store(false); }
+void GybPlayer::pause() {
+    m_playing.store(false);
+    // Release sounding voices so nothing swells back in on resume (see
+    // InterceptingOpl::silenceAllVoices; fixes the "칭~" locally + over tunnel).
+    std::lock_guard<std::mutex> lock(m_playerMutex);
+    if (m_opl) m_opl->silenceAllVoices();
+}
 
 void GybPlayer::stop()
 {
+    // Repeated STOP while already stopped = complete no-op (2026-07-27, see
+    // ImsPlayer::stop - every press used to ship another audible CmdReset).
+    const bool bWasActive = m_playing.load() || m_currentTick.load() != 0
+            || m_position.load() != 0;
+    if (!bWasActive) {
+        m_playing.store(false);
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(m_playerMutex);
     m_playing.store(false);
     m_position.store(0);
@@ -317,7 +373,17 @@ void GybPlayer::stop()
     m_lpfLastL = 0.0f; m_lpfLastR = 0.0f;
     m_needsFadeIn.store(false);
     m_fadeCounter.store(0);
+    // Key-off first so the DEVICE at the far end of the tunnel gets a normal
+    // note-off and releases naturally, then reset the local chip (instant
+    // silence, no ringing tail) and rewind with the tunnel suppressed, so the
+    // reset and the driver's re-init do not have to be streamed over a 31250
+    // baud link. Unsuppressing arms the resync that rebuilds device state on
+    // the next play.
+    if (m_opl) m_opl->silenceAllVoices();
+    OplTunnelSender::instance().setSuppressed(true);
+    if (m_opl) m_opl->init();
     if (m_backend) m_backend->rewind(0);
+    OplTunnelSender::instance().setSuppressed(false);
     for (int i = 0; i < 18; ++i) m_voiceLevelOut[i].store(0);
     for (int i = 0; i < 64; ++i) m_instLevelOut[i].store(0);
     memset(m_cachedVoiceInsts, 0, sizeof(m_cachedVoiceInsts));
@@ -330,6 +396,10 @@ void GybPlayer::setPosition(unsigned long positionMs)
 {
     if (!m_backend || positionMs >= m_duration) return;
     std::lock_guard<std::mutex> lock(m_playerMutex);
+
+    // OPL tunnel: suppress the wire during the fast-forward (see
+    // ImsPlayer::setPosition) - unsuppress below resyncs via snapshot.
+    OplTunnelSender::instance().setSuppressed(true);
 
     // Replay tick-by-tick using the live per-tick refresh to find the target
     // tick whose accumulated wall-clock first exceeds positionMs. This matches
@@ -354,6 +424,8 @@ void GybPlayer::setPosition(unsigned long positionMs)
     // Clear the DSP low-pass filter state so its stale value doesn't leak
     // through as a click/thump when playback resumes after the seek.
     m_lpfLastL = 0.0f; m_lpfLastR = 0.0f;
+
+    OplTunnelSender::instance().setSuppressed(false);
     emit positionChanged(positionMs);
 }
 
@@ -432,7 +504,14 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
         return;
     }
     if (!m_backend || !m_opl || !m_playing.load()) {
-        std::memset(output, 0, frameCount * 2 * sizeof(float));
+        // Anti-click on STOP (2026-07-27, ImsPlayer parity): ramp the last
+        // emitted sample to 0 across this first stopped buffer instead of an
+        // instant jump to silence.
+        for (unsigned int i = 0; i < frameCount; ++i) {
+            float t = 1.0f - (float)i / (float)frameCount;
+            output[i * 2]     = m_lastOutL * t;
+            output[i * 2 + 1] = m_lastOutR * t;
+        }
         m_lastOutL = 0.0f; m_lastOutR = 0.0f;
         return;
     }
@@ -451,11 +530,17 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
         if (refresh < 1.0f) refresh = 7.0f;
         float samplesPerTick = (float)m_sampleRate / refresh;
         if (current < samplesPerTick) break;
+        // OPL tunnel: stamp this tick's register writes with the song clock so
+        // the jukebox replays them with the exact tick timing (one timed batch
+        // per tick - see OplTunnelSender::setNowMs). Same as ImsPlayer.
+        OplTunnelSender::instance().setNowMs(
+            (uint32_t)(m_tunnelClockSamples * 1000.0 / (double)m_sampleRate));
         if (!m_backend->update()) {
             m_playing.store(false);
             QMetaObject::invokeMethod(this, "finished", Qt::QueuedConnection);
             break;
         }
+        m_tunnelClockSamples += (double)samplesPerTick;
         current -= samplesPerTick;
         m_currentTick.fetch_add(1);
         ticked = true;
@@ -498,8 +583,13 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
             l = softClip(l * drive);
             r = softClip(r * drive);
         }
-        output[i * 2]     = l * volScale;
-        output[i * 2 + 1] = r * volScale;
+        if (OplTunnelSender::instance().isEnabled()) {
+            output[i * 2]     = 0.0f;
+            output[i * 2 + 1] = 0.0f;
+        } else {
+            output[i * 2]     = l * volScale;
+            output[i * 2 + 1] = r * volScale;
+        }
     }
     if (framesToRender < frameCount) {
         std::memset(output + framesToRender * 2, 0, (frameCount - framesToRender) * 2 * sizeof(float));
@@ -537,8 +627,15 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
         }
         for (int i = 0; i < 64; ++i) m_instLevelOut[i].store(perInst[i], std::memory_order_relaxed);
 
-        // Visualizer Lock-Free Cache Update
-        if (m_backend && m_opl) {
+        // Visualizer Lock-Free Cache Update - at display speed only (~30/s),
+        // not once per tick; see m_uiSnapshotFrames in the header.
+        m_uiSnapshotFrames += framesToRender;
+        bool bRefreshUi = false;
+        if (m_uiSnapshotFrames >= (unsigned)(m_sampleRate / 30)) {
+            m_uiSnapshotFrames = 0;
+            bRefreshUi = true;
+        }
+        if (bRefreshUi && m_backend && m_opl) {
             InterceptingOpl* opl = static_cast<InterceptingOpl*>(m_opl);
             for (int i = 0; i < 18; ++i) {
                 QString instName = "";

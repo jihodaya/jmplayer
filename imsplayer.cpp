@@ -12,6 +12,7 @@
 #include <windows.h>
 #include "jjomesynth.h"
 #include "okafilehandler.h"
+#include "opltunnelsender.h" // OPL register tunnel to the bare-metal jukebox
 
 
 // Include mus.h for direct CmusPlayer usage
@@ -60,6 +61,12 @@ public:
     }
 
     void init() override {
+        // OPL register tunnel: tell the jukebox to reset+OPL3-enable its own
+        // chip (it does the equivalent of the deep reset + 0x101/0x105 below).
+        // We do NOT tunnel the 512-write deep reset itself (redundant with the
+        // jukebox's OPL3_Reset, and ~0.5s of serial at 31250).
+        OplTunnelSender::instance().reset();
+
         CNemuopl::init();
         // Deep Reset: Zero out all OPL3 registers (Bank 0 & 1) to prevent state leakage
         for (int i = 0x00; i <= 0xFF; ++i) {
@@ -70,6 +77,16 @@ public:
         CNemuopl::write(0x101, 0x20);
         CNemuopl::write(0x105, 0x01); // OPL3 Mode Enable (Bit 0 = 1, required for stereo)
         clearInternal();
+    }
+
+    // Writes a register to the local Nuked chip AND streams it to the jukebox's
+    // OPL chip over the tunnel (a no-op when the tunnel is disabled). The tunnel
+    // register is the full 9-bit value CNemuopl::write() itself forms:
+    // (currChip << 8) | reg. jmp's virtual-stereo panning is already baked into
+    // `val` by the time we get here, so the jukebox applies these raw.
+    inline void tunnelChipWrite(int reg, int val) {
+        CNemuopl::write(reg, val);
+        OplTunnelSender::instance().queueWrite((uint16_t)(((getchip() & 1) << 8) | (reg & 0x1FF)), (uint8_t)val);
     }
 
     void clearInternal() {
@@ -130,9 +147,21 @@ public:
             int ch = bankOffset + (baseReg - 0xC0);
             if (ch < 18) {
                 originalPanReg[ch] = val; // Store original register value
+                // OPL tunnel (2026-07-15 redesign): ship the ORIGINAL value,
+                // NOT the pan-injected one. The jukebox applies its own
+                // virtual-stereo policy on its end (same CNukedCopl::write
+                // path its file playback uses), so the live sound over there
+                // matches its file playback exactly. Baking jmp's pan map in
+                // here made the Pi mix depend on jmp's stereo-mode setting -
+                // hard-panned channels came out "missing" vs file playback,
+                // deterministically, every time.
+                OplTunnelSender::instance().queueWrite(
+                    (uint16_t)(((getchip() & 1) << 8) | (reg & 0x1FF)), (uint8_t)val);
                 int panBit = JJoMeSynth::instance().getChannelPanBit(ch);
                 val &= ~0x30;
                 val |= panBit;
+                CNemuopl::write(reg, val); // local chip only - jmp's own stereo
+                return;
             }
         }
 
@@ -176,9 +205,9 @@ public:
                 int finalVal = val;
                 int finalRegB = regB[ch];
                 applyTranspose(ch, finalVal, finalRegB);
-                
-                CNemuopl::write(reg, finalVal);
-                CNemuopl::write(0xB0 + (baseReg - 0xA0) + bank, finalRegB);
+
+                tunnelChipWrite(reg, finalVal);
+                tunnelChipWrite(0xB0 + (baseReg - 0xA0) + bank, finalRegB);
                 return;
             }
         }
@@ -191,15 +220,15 @@ public:
                 int finalVal = val;
                 applyTranspose(ch, finalRegA, finalVal);
 
-                CNemuopl::write(0xA0 + (baseReg - 0xB0) + bank, finalRegA);
-                CNemuopl::write(reg, finalVal);
-                
+                tunnelChipWrite(0xA0 + (baseReg - 0xB0) + bank, finalRegA);
+                tunnelChipWrite(reg, finalVal);
+
                 val = finalVal; // 아래 레벨 미터 감지 로직의 KeyOn 비트 분석을 위해 동기화
             }
         }
 
-        CNemuopl::write(reg, val);
-        
+        tunnelChipWrite(reg, val);
+
         // Channel Key-On (0xB0 - 0xB8)
         if (baseReg >= 0xB0 && baseReg <= 0xB8) {
             int ch = bankOffset + (baseReg - 0xB0);
@@ -250,6 +279,24 @@ public:
             if (baseReg == 0x52) volume[10] = ((63 - (val & 0x3F)) * 127) / 63; // HH TL
             if (baseReg == 0x55) volume[9] = ((63 - (val & 0x3F)) * 127) / 63; // CYM TL
         }
+    }
+
+    // Key-off every voice WITHOUT disturbing instrument/frequency setup, so a
+    // paused song can resume cleanly. 2026-07-27 fix for "IMS를 일시정지 후
+    // 재개하면 칭~ 소리": pause() used to just stop rendering, leaving every
+    // sounding note keyed-ON in the chip; on resume the held sustain swelled
+    // back in (worse, jmp's resume fade-in ramps it up from silence = the
+    // "칭~"). Clearing key-on bit 5 of B0-B8 (both banks) releases the notes;
+    // 0xBD's drum key bits (0-4) release rhythm-mode percussion. Goes through
+    // write() so the OPL register tunnel carries the key-offs to mt32-pi too
+    // (fixes the same artifact on the Pico->mt32-pi path in one place).
+    void silenceAllVoices() {
+        for (int ch = 0; ch < 18; ++ch) {
+            const int bank = (ch >= 9) ? 0x100 : 0;
+            write(bank + 0xB0 + (ch % 9), regB[ch] & ~0x20);
+        }
+        if (m_drumMode)
+            write(0xBD, 0x20); // keep rhythm mode on, clear the 5 drum key bits
     }
 
     bool keyOn[18];
@@ -599,21 +646,68 @@ bool ImsPlayer::loadFile(const QString &fileName)
 
 void ImsPlayer::play()
 {
-    m_needsFadeIn = true;
-    m_fadeCounter = 0;
     m_playing = true;
 }
 
 void ImsPlayer::pause()
 {
     m_playing = false;
+
+    // Release all sounding OPL voices so nothing rings/swells back in on
+    // resume (see InterceptingOpl::silenceAllVoices - fixes the "칭~" on
+    // resume, both locally and over the mt32-pi tunnel). Take the player lock
+    // so this doesn't race renderAudio's use of m_opl; renderAudio uses
+    // try_lock and simply ramps to silence for one buffer if it can't get it.
+    std::lock_guard<std::mutex> lock(m_playerMutex);
+    if (m_opl)
+        static_cast<InterceptingOpl*>(m_opl)->silenceAllVoices();
 }
 
 void ImsPlayer::stop()
 {
+    // Repeated STOP presses while already cleanly stopped must be complete
+    // no-ops (2026-07-27 "정지 연타 = 땡땡땡": every press used to re-run the
+    // rewind + arm a fresh tunnel resync, each shipping another CmdReset +
+    // snapshot to mt32-pi, each one audible).
+    const bool bWasActive = m_playing.load() || m_currentTick.load() != 0
+            || m_position.load() != 0;
     m_playing = false;
+    if (!bWasActive)
+        return;
+
     std::lock_guard<std::mutex> lock(m_playerMutex);
+
+    // 2026-07-27 ("정지 누를때 칭~", mt32-pi tunnel path): rewind() below does a
+    // hard OPL reset (opl->init) which, over the tunnel, becomes an abrupt
+    // CmdReset that cuts mt32-pi's sounding notes dead = the "칭". Instead:
+    //   1) gently key-off every voice (note-offs, so they RELEASE),
+    //   2) WAIT for the sender to actually ship those key-offs - without this
+    //      they were still queued when the resync below armed, and the resync
+    //      DISCARDED them and sent an abrupt CmdReset+snapshot instead (the
+    //      first version of this fix missed that),
+    //   3) suppress the tunnel across the rewind so its hard reset never goes
+    //      on the wire - mt32-pi's notes just decay naturally.
+    // Unsuppressing arms a resync that fires with the next PLAY's first
+    // writes, rebuilding mt32-pi's chip while everything is quiet. (Local
+    // playback is silenced by the render anti-click ramp.)
+    // Local chip: hard-silence (fastest release + key-off) so playback stops
+    // instantly here. Over the TUNNEL we only send the plain key-offs - the
+    // full hard-silence is ~54 register writes, which at 31250 baud take
+    // ~0.5s to arrive and were audible as the sound trailing on after STOP
+    // (2026-07-27). Key-offs alone are 18 writes; the device's own notes then
+    // release naturally, and the next play's resync snapshot rebuilds
+    // everything anyway. (mt32-pi is deliberately NOT modified for this.)
+    // Key-off first so the DEVICE at the far end of the tunnel gets a normal
+    // note-off and releases naturally, then reset the local chip (instant
+    // silence, no ringing tail) and rewind with the tunnel suppressed, so the
+    // reset and the driver's re-init do not have to be streamed over a 31250
+    // baud link. Unsuppressing arms the resync that rebuilds device state on
+    // the next play.
+    if (m_opl) static_cast<InterceptingOpl*>(m_opl)->silenceAllVoices();
+    OplTunnelSender::instance().setSuppressed(true);
+    if (m_opl) m_opl->init();
     if (m_player) m_player->rewind();
+    OplTunnelSender::instance().setSuppressed(false);
     // Removed m_opl->init() because rewind() already does SoundWarmInit() which resets registers.
     // Calling m_opl->init() here desyncs the hardware state (like 0x104 4OP mask) from the driver.
     
@@ -633,9 +727,16 @@ void ImsPlayer::setPosition(unsigned long positionMs)
 {
     std::lock_guard<std::mutex> lock(m_playerMutex);
     if (m_player) {
+        // OPL tunnel: the fast-forward below replays every register write of
+        // the skipped span - tens of seconds of writes in one burst, which
+        // used to lag the 31250-baud link far behind ("seek 후 소리가 밀려
+        // 한번에 들어온다"). Suppress the wire during the seek (the local
+        // mirror keeps tracking), then unsuppress = CmdReset + fresh snapshot
+        // of the post-seek chip state.
+        OplTunnelSender::instance().setSuppressed(true);
         m_player->rewind();
         // Removed m_opl->init() for the same reason as in stop()
-        
+
         unsigned long targetTicks = 0;
         
         if (m_isVgm) {
@@ -673,6 +774,8 @@ void ImsPlayer::setPosition(unsigned long positionMs)
         // Clear the DSP low-pass filter state so its stale value doesn't leak
         // through as a click/thump when playback resumes after the seek.
         m_lpfLastL = 0.0f; m_lpfLastR = 0.0f;
+
+        OplTunnelSender::instance().setSuppressed(false);
     }
 }
 
@@ -728,7 +831,17 @@ void ImsPlayer::renderAudio(float* output, unsigned int frameCount)
         return;
     }
     if (!m_playing || !m_player || !m_opl) {
-        memset(output, 0, frameCount * 2 * sizeof(float));
+        // Anti-click on STOP (2026-07-27): ramp the last emitted sample down
+        // to 0 across this first stopped buffer instead of jumping to silence
+        // instantly - the instant jump from a full-amplitude note to 0 is the
+        // "칭"/click heard when STOP is pressed mid-song. After the ramp
+        // m_lastOut is 0, so every subsequent stopped buffer is true silence.
+        // (Same treatment the try_lock-failed branch above already uses.)
+        for (unsigned int i = 0; i < frameCount; ++i) {
+            float t = 1.0f - (float)i / (float)frameCount;
+            output[i * 2]     = m_lastOutL * t;
+            output[i * 2 + 1] = m_lastOutR * t;
+        }
         m_lastOutL = 0.0f; m_lastOutR = 0.0f;
         return;
     }
@@ -748,17 +861,34 @@ void ImsPlayer::renderAudio(float* output, unsigned int frameCount)
 
         if (currentCounter < samplesPerTick) break;
 
+        // Stamp this tick's register writes with the song clock, so the OPL
+        // tunnel ships them as one timed batch (see OplTunnelSender::setNowMs).
+        OplTunnelSender::instance().setNowMs(
+            (uint32_t)(m_tunnelClockSamples * 1000.0 / (double)m_sampleRate));
+
         if (!m_player->update()) {
             m_playing = false;
             QMetaObject::invokeMethod(this, "finished", Qt::QueuedConnection);
             break;
         }
         currentCounter -= samplesPerTick;
-        m_currentTick.fetch_add(1); 
+        m_tunnelClockSamples += (double)samplesPerTick;
+        m_currentTick.fetch_add(1);
         logicUpdated = true;
     }
 
-    if (logicUpdated && m_player && m_opl) {
+    // Refresh the channel-monitor snapshot at display speed (~30/s), not once
+    // per sequencer tick. Everything below is for the UI only, and at IMS's
+    // 512 Hz tick rate it was running on essentially every audio callback -
+    // ~120 heap allocations per callback, in the realtime audio thread. See
+    // m_uiSnapshotFrames in the header for why that stalls playback.
+    m_uiSnapshotFrames += framesToRender;
+    const unsigned nUiSnapshotInterval = (unsigned)(m_sampleRate / 30);
+    const bool bRefreshUi = (m_uiSnapshotFrames >= nUiSnapshotInterval);
+    if (bRefreshUi)
+        m_uiSnapshotFrames = 0;
+
+    if (logicUpdated && bRefreshUi && m_player && m_opl) {
         InterceptingOpl* opl = static_cast<InterceptingOpl*>(m_opl);
         int numVoices = m_isSop ? 20 : (m_isRol ? 16 : 18);
         for (int i = 0; i < numVoices; ++i) {
@@ -937,8 +1067,13 @@ void ImsPlayer::renderAudio(float* output, unsigned int frameCount)
         }
         
         // 3. Apply Main Volume and Output
-        output[i * 2] = l * volScale;
-        output[i * 2 + 1] = r * volScale;
+        if (OplTunnelSender::instance().isEnabled()) {
+            output[i * 2] = 0.0f;
+            output[i * 2 + 1] = 0.0f;
+        } else {
+            output[i * 2] = l * volScale;
+            output[i * 2 + 1] = r * volScale;
+        }
     }
     
     // Fill remaining buffer with silence if needed
@@ -1046,6 +1181,11 @@ void ImsPlayer::forceUpdateOplStereo()
     std::lock_guard<std::mutex> lock(m_playerMutex);
     if (m_opl) {
         InterceptingOpl* iopl = static_cast<InterceptingOpl*>(m_opl);
+        // LOCAL chip only, deliberately NOT tunneled (2026-07-15 redesign):
+        // jmp's virtual-stereo pan map is a local listening preference. The
+        // jukebox applies its own stereo mode on its end (it has an equivalent
+        // ForceUpdateStereo), and the tunnel only ever carries the ORIGINAL
+        // 0xC0 values - see the 0xC0 intercept in InterceptingOpl::write().
         iopl->CNemuopl::write(0x105, 0x01); // Ensure OPL3 mode is ON
         for (int ch = 0; ch < 18; ++ch) {
             int reg = ((ch >= 9) ? 0x100 : 0) + 0xC0 + (ch % 9);

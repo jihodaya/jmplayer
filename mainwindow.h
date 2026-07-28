@@ -124,6 +124,9 @@ private slots:
     void toggleDsp();
     void togglePianoRoll();
     void updateDspButtonStyle();
+    void toggleOplTunnel();
+    void updateOplTunnelButtonStyle();
+    void ensureJJoMeSynthReady();
     void onSelectBankFile();
     void showHelpDialog();
     void toggleRecording();
@@ -188,6 +191,7 @@ protected:
     QPushButton *channelButton;
     QPushButton *lyricsButton;
     QPushButton *dspButton;
+    QPushButton *oplTunnelButton; // OPL register tunnel to the jukebox (shown with DSP)
     QPushButton *rollButton;
     QPushButton *bankButton;
     QPushButton *recordButton;
@@ -226,6 +230,7 @@ protected:
     QTimer *channelUpdateTimer;
     QTimer *previewSelectTimer = nullptr; // debounces the heavy per-selection preview load
     QTimer *playlistSaveTimer = nullptr; // debounces heavy playlist JSON saves
+    QTimer *volumeSaveTimer = nullptr; // debounces the settings write while dragging the volume slider
     QTimer *searchDebounceTimer = nullptr; // debounces global playlist search
 
     // Timer for window position tracking

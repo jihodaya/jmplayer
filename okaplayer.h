@@ -84,6 +84,9 @@ private:
     std::atomic<int>           m_volume;
     std::atomic<int>           m_dspLevel;
     std::atomic<uint64_t>      m_currentTick;
+    // OPL-tunnel song clock (audio thread only) - see ImsPlayer's member of
+    // the same name: monotonic sample count stamping each tick's writes.
+    double m_tunnelClockSamples = 0.0;
 
     QString m_title;
     QString m_bankName;
@@ -112,6 +115,13 @@ private:
     char m_cachedVoiceNotes[20][8];
     uint8_t m_cachedVoiceVols[20];
     uint8_t m_cachedVoiceKeyOn[20];
+
+    // See ImsPlayer's identical member: the channel-monitor snapshot below is
+    // display-only but allocates heavily (QString/QByteArray per voice), and
+    // running it on every ticked audio callback put thousands of heap
+    // allocations a second in the realtime thread, where the heap lock is
+    // shared with the GUI (2026-07-27).
+    unsigned m_uiSnapshotFrames = 0;
 
 };
 
