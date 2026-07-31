@@ -43,5 +43,5 @@ Nuked-SC55 는 jmp의 일부가 아닙니다. 별개의 프로그램입니다.
             https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float
   라이선스  MAME License (비상업적 사용에 한함)
 
-jmp 자체는 퍼블릭 도메인이지만, Nuked-SC55는 그렇지 않습니다.
-그래서 jmp는 에뮬레이터를 함께 배포하지 않고, 이 폴더만 만들어 둡니다.
+jmp는 MIT 라이선스이고, Nuked-SC55는 MAME 라이선스(비상업)입니다.
+서로 조건이 달라 jmp는 에뮬레이터를 함께 배포하지 않고, 이 폴더만 만들어 둡니다.

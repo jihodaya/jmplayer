@@ -9,7 +9,7 @@
 > | Their licence | MAME License — **non-commercial use only** |
 >
 > The patch file necessarily quotes a small amount of their code as context.
-> Everything else here is jmp's own work and is public domain, as jmp is.
+> Everything else here is jmp's own work, under jmp's MIT licence.
 > Applying the patch produces a derivative of their work, which stays under
 > **their** licence — so a build made this way must not be sold or used
 > commercially, and if you pass one on you must include its complete source.
@@ -127,9 +127,10 @@ line endings; if your tools rewrite it to CRLF, `git apply` will reject it.
 
 ## Licence
 
-**Not for redistribution with jmp.** Nuked-SC55 is not public domain, and jmp is;
-shipping a build of it would end that. Only this patch, which is jmp's own work,
-lives here. The emulator and its ROMs are the user's to obtain.
+**Not for redistribution with jmp.** Nuked-SC55 is under the MAME licence
+(non-commercial); jmp is MIT. Shipping a build of the emulator would drag jmp's
+distribution under the stricter non-commercial terms, so only this patch - jmp's
+own work - lives here. The emulator and its ROMs are the user's to obtain.
 
 ## Using an unpatched emulator
 

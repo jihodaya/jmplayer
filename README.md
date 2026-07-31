@@ -36,7 +36,7 @@ cd JMPlayer
 
 ### 📄 License & Credits
 
-*   **Project Code:** Released under the Public Domain. Anyone is free to use, modify, and distribute.
+*   **Project Code:** Released under the **MIT License** (see [`LICENSE`](LICENSE)). Free to use, modify, distribute and sell; just keep the copyright notice.
 *   **Third-party Dependencies:** Dynamically linked to **Qt 6 (LGPL v3)** and **AdPlug (LGPL v2.1)** to comply with LGPL requirements.
 *   **Credits:** Thanks to **BK (병코돌고래)** for providing the sample song collection (`BK/` folder).
 *   **Nuked-SC55:** A separate program, not part of JMPlayer — by [nukeykt](https://github.com/nukeykt/Nuked-SC55) with the [GUI fork](https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float) by linoshkmalayil, under the MAME License (non-commercial). Only JMPlayer's own patch is included here.
@@ -88,7 +88,7 @@ cd JMPlayer
 
 ### 📄 라이선스 및 제공자 정보
 
-*   **프로젝트 소스 코드:** 퍼블릭 도메인(Public Domain)으로 배포됩니다. 자유롭게 사용, 수정 및 배포하실 수 있습니다.
+*   **프로젝트 소스 코드:** **MIT 라이선스**로 배포됩니다([`LICENSE`](LICENSE) 참고). 저작권 고지만 유지하면 자유롭게 사용·수정·배포·판매하실 수 있습니다.
 *   **외부 라이브러리:** LGPL 라이선스 준수를 위해 **Qt 6 (LGPL v3)** 및 **AdPlug (LGPL v2.1)** 라이브러리와 동적 링크(DLL) 방식으로 빌드됩니다.
 *   **제공자 기여:** 음원 테스트를 위해 샘플 연주곡 세트(`BK/` 폴더)를 제공해 주신 **BK (병코돌고래)** 님께 감사드립니다.
 *   **Nuked-SC55:** JMPlayer의 일부가 아닌 별개의 프로그램입니다 — [nukeykt](https://github.com/nukeykt/Nuked-SC55) 원작, [GUI 포크](https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float)는 linoshkmalayil, MAME 라이선스(비상업). 여기에는 JMPlayer의 패치만 포함됩니다.

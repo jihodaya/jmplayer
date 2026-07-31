@@ -4,7 +4,7 @@ This document contains license information for the JJoMe MIDI Player project and
 
 ## JJoMe MIDI Player Project License
 
-The source code for the JJoMe MIDI Player project is released into the public domain. You are free to use, modify, copy, and distribute this code and its compiled binaries for any purpose, without any restrictions.
+The source code for the JJoMe MIDI Player project is released under the **MIT License** (see the [`LICENSE`](LICENSE) file for the full text). You are free to use, modify, copy, distribute, and sell this code and its compiled binaries, provided the copyright notice and permission notice are kept in copies.
 
 There is no warranty for this software. Use at your own risk.
 

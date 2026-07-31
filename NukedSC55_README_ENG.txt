@@ -43,5 +43,6 @@ Nuked-SC55 is not part of jmp. It is a separate program.
             https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float
   Licence   MAME License (non-commercial use only)
 
-jmp itself is public domain; Nuked-SC55 is not. That is why jmp
-ships only this folder and its note, never the emulator.
+jmp is MIT-licensed; Nuked-SC55 is under the MAME licence
+(non-commercial). Their terms differ, so jmp ships only this
+folder and its note, never the emulator.
