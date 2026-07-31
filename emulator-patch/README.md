@@ -88,20 +88,27 @@ looks like "the UART is never serviced" when nothing is wrong.
 
 On Windows, `build_patched_sc55.bat` (in this folder) does the whole thing:
 clones the source, applies the patch, builds it, and copies the result into
-jmp's `NukedSC55` folder. You only supply the toolchain and SDL2 up front:
+jmp's `NukedSC55` folder. **SDL2 is downloaded automatically** the first time,
+so usually you just run it:
 
 ```bat
-REM MinGW: Qt's is used by default; set this only if yours is elsewhere.
-set MINGW_DIR=C:\Qt\Tools\mingw1310_64
-REM SDL2 MinGW dev package, unzipped (the folder that holds x86_64-w64-mingw32\).
-REM Download SDL2-devel-*-mingw.zip from https://github.com/libsdl-org/SDL/releases
-set SDL2_ROOT=C:\path\to\SDL2-2.30.12
-
 build_patched_sc55.bat
 ```
 
-Re-running it is safe: it skips the clone/patch if they are already done and
-just rebuilds. Afterwards, add your SC-55 ROM files to `NukedSC55\` (see below).
+You still need **Git**, **CMake** and a **MinGW C++23 toolchain** installed.
+Qt's MinGW is used by default; point `MINGW_DIR` at yours if it lives elsewhere:
+
+```bat
+set MINGW_DIR=C:\Qt\Tools\mingw1310_64
+build_patched_sc55.bat
+```
+
+To skip the automatic download, set `SDL2_ROOT` to an already-unzipped SDL2
+MinGW dev package (the folder holding `x86_64-w64-mingw32\`).
+
+Re-running it is safe: it reuses the download, skips the clone/patch if already
+done, and just rebuilds. Afterwards, add your SC-55 ROM files to `NukedSC55\`
+(see below).
 
 ## The manual way
 

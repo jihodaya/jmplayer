@@ -27,6 +27,11 @@ REM       set SDL2_ROOT=C:\path\to\SDL2-2.30.12
 REM     Get it from https://github.com/libsdl-org/SDL/releases (…-mingw.zip).
 REM ========================================
 
+REM %~dp0 ends with a backslash; "%~dp0" then reads as ...\" and the trailing
+REM backslash escapes the closing quote for tools like tar. HERE has it stripped.
+set "HERE=%~dp0"
+set "HERE=%HERE:~0,-1%"
+
 set SRC_DIR=%~dp0Nuked-SC55-GUI-Float
 set BUILD_DIR=%SRC_DIR%\build
 set OUT_DIR=%~dp0..\NukedSC55
@@ -53,16 +58,34 @@ if not exist "%MINGW_DIR%\bin\g++.exe" (
 )
 
 REM ---- SDL2 ------------------------------------------------------------
+REM Order: honour a caller-set SDL2_ROOT, else reuse an SDL2-* folder already
+REM sitting next to this script, else download the dev package automatically.
 if not defined SDL2_ROOT (
-    REM Try a couple of common spots next to this script before giving up.
-    for /d %%D in ("%~dp0SDL2-*") do set SDL2_ROOT=%%D
+    for /d %%D in ("%~dp0SDL2-*") do set "SDL2_ROOT=%%D"
 )
 if not defined SDL2_ROOT (
-    echo [ERROR] SDL2 development package not found.
-    echo         Download SDL2-devel-*-mingw.zip from
-    echo         https://github.com/libsdl-org/SDL/releases , unzip it, and:
-    echo             set SDL2_ROOT=C:\path\to\SDL2-2.30.12
-    echo         then run this script again.
+    set "SDL2_VER=2.30.12"
+    set "SDL2_ZIP=%~dp0SDL2-devel-!SDL2_VER!-mingw.zip"
+    echo SDL2 not found - downloading the MinGW dev package ^(!SDL2_VER!^) ...
+    curl -L -f -o "!SDL2_ZIP!" "https://github.com/libsdl-org/SDL/releases/download/release-!SDL2_VER!/SDL2-devel-!SDL2_VER!-mingw.zip"
+    if errorlevel 1 (
+        echo [ERROR] SDL2 download failed. Check your connection, or download
+        echo         SDL2-devel-!SDL2_VER!-mingw.zip yourself, unzip it, and:
+        echo             set SDL2_ROOT=C:\path\to\SDL2-!SDL2_VER!
+        goto :fail
+    )
+    echo Extracting ...
+    tar -xf "!SDL2_ZIP!" -C "%HERE%"
+    if errorlevel 1 (
+        echo [ERROR] Could not unzip SDL2 ^(tar not available?^). Unzip
+        echo         "!SDL2_ZIP!" here by hand and run this script again.
+        goto :fail
+    )
+    del "!SDL2_ZIP!" >nul 2>nul
+    for /d %%D in ("%~dp0SDL2-*") do set "SDL2_ROOT=%%D"
+)
+if not defined SDL2_ROOT (
+    echo [ERROR] SDL2 still not found after download.
     goto :fail
 )
 set SDL2_CMAKE=%SDL2_ROOT%\x86_64-w64-mingw32\lib\cmake\SDL2
