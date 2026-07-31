@@ -191,8 +191,9 @@ set(SOURCES
     playlistmodel.cpp
     oplstereodialog.cpp
     opltunnelsender.cpp
-    midireset/midireset.cpp
-    midireset/midiresetdialog.cpp
+    midireset.cpp
+    midiresetdialog.cpp
+    sc55bridge.cpp
 )
 
 set(HEADERS

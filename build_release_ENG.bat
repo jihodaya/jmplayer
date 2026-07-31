@@ -5,58 +5,95 @@ REM Always operate from this script's own directory (CWD-safe)
 cd /d "%~dp0"
 REM ========================================
 REM JJoMe MIDI Player - License Compliant Build (ENGLISH UI)
-REM Qt6 (LGPL) + NOB Player
-REM Builds with -DENGLISH_UI=ON into build_eng\ and release_eng\
-REM (Song lyrics are unaffected; only the player UI text is English.)
+REM Qt6 (LGPL) + NOB Player + Sound-Module Reset + Nuked-SC55 support
 REM ========================================
+REM
+REM English-UI counterpart of build_release.bat: same source tree built with
+REM -DENGLISH_UI=ON into its own folders, so the two never clash. (Song lyrics
+REM are unaffected; only player UI text.)
+REM
+REM   Source (CMakeLists + assets) : .\  (this folder)
+REM   Build dir                    : .\build_eng\
+REM   Release output               : .\release_eng\
+REM ========================================
+
+REM Absolute paths so cmake/copy never depend on the current directory.
+set SCRIPT_DIR=%~dp0
+set SRC_DIR=%SCRIPT_DIR%.
+set BUILD_DIR=%SCRIPT_DIR%build_eng
+set RELEASE_DIR=%SCRIPT_DIR%release_eng
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player R2.5  (English UI)
+echo JJoMe MIDI Player R2.5e  (English UI)
 echo License-Compliant Build Script
 echo ========================================
 echo.
-echo This build uses:
-echo - Qt 6 (LGPL v3) - Dynamically linked
-echo - Windows MIDI API - System library
-echo - K_icon.ico - Application icon
-echo - ENGLISH_UI = ON
+echo Source : %SRC_DIR%
+echo Build  : %BUILD_DIR%
+echo Output : %RELEASE_DIR%
+echo ENGLISH_UI = ON
 echo.
 
 REM Set environment paths
-set QT_DIR=C:\Qt\6.9.2\mingw_64
-set MINGW_DIR=C:\Qt\Tools\mingw1310_64
+REM Toolchain locations. These are DEFAULTS, not fixed paths: set QT_DIR and
+REM MINGW_DIR in the environment beforehand and yours are used instead, so the
+REM script works on a machine that keeps Qt somewhere else.
+REM
+REM   set QT_DIR=D:\Qt\6.9.2\mingw_64
+REM   set MINGW_DIR=D:\Qt\Tools\mingw1310_64
+REM   build_release_ENG.bat
+if not defined QT_DIR    set QT_DIR=C:\Qt\6.9.2\mingw_64
+if not defined MINGW_DIR set MINGW_DIR=C:\Qt\Tools\mingw1310_64
 set PATH=%QT_DIR%\bin;%MINGW_DIR%\bin;%PATH%
 
 echo Setting up Qt6 environment...
 echo Qt Directory: %QT_DIR%
 echo MinGW Directory: %MINGW_DIR%
+
+if not exist "%QT_DIR%\bin\qmake.exe" (
+    echo [ERROR] Qt6 not found at: %QT_DIR%
+    echo         Set QT_DIR to your Qt mingw_64 folder and run again.
+    if not defined NO_PAUSE pause
+    exit /b 1
+)
+if not exist "%MINGW_DIR%\bin\g++.exe" (
+    echo [ERROR] MinGW not found at: %MINGW_DIR%
+    echo         Set MINGW_DIR to your Qt MinGW toolchain folder and run again.
+    if not defined NO_PAUSE pause
+    exit /b 1
+)
 echo.
 
-REM Clean previous build
-echo [1/5] Cleaning previous build...
-if exist build_eng rmdir /s /q build_eng
-if exist release_eng rmdir /s /q release_eng
-mkdir build_eng
+REM Clean previous build (only THIS folder's build_eng/release_eng)
+echo [1/5] Cleaning previous English build...
+if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+if exist "%RELEASE_DIR%" rmdir /s /q "%RELEASE_DIR%"
+mkdir "%BUILD_DIR%"
 echo Done.
 echo.
 
-REM Configure
+REM Configure (out-of-source: build dir here, source dir is the parent jmp\)
 echo [2/5] Configuring with CMake (ENGLISH_UI=ON)...
-cd /D %~dp0build_eng
+cd /d "%BUILD_DIR%"
 REM Explicit compiler paths prevent CMake from auto-detecting 32-bit gcc
 REM (e.g. C:\MinGW\bin\gcc.exe), which causes a Qt6 64-bit mismatch failure
 REM with the message: "version: 6.9.2 (64bit)" rejection.
+REM Forward slashes: CMake treats a backslash as an escape, and a Windows path
+REM pasted straight in makes CMakeRCCompiler.cmake fail to parse on the next run.
+set "QT_DIR_FS=%QT_DIR:\=/%"
+set "MINGW_DIR_FS=%MINGW_DIR:\=/%"
+
 cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DENGLISH_UI=ON ^
-      -DCMAKE_C_COMPILER=C:/Qt/Tools/mingw1310_64/bin/gcc.exe ^
-      -DCMAKE_CXX_COMPILER=C:/Qt/Tools/mingw1310_64/bin/g++.exe ^
-      -DCMAKE_RC_COMPILER=C:/Qt/Tools/mingw1310_64/bin/windres.exe ^
-      -DCMAKE_PREFIX_PATH=%QT_DIR% ..
+      -DCMAKE_C_COMPILER="%MINGW_DIR_FS%/bin/gcc.exe" ^
+      -DCMAKE_CXX_COMPILER="%MINGW_DIR_FS%/bin/g++.exe" ^
+      -DCMAKE_RC_COMPILER="%MINGW_DIR_FS%/bin/windres.exe" ^
+      -DCMAKE_PREFIX_PATH="%QT_DIR_FS%" "%SRC_DIR%"
 
 if errorlevel 1 (
     echo.
     echo [ERROR] CMake configuration failed!
-    cd ..
+    cd /d "%SCRIPT_DIR%"
     if not defined NO_PAUSE pause
     exit /b 1
 )
@@ -70,32 +107,37 @@ cmake --build . --config Release -j 4
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed!
-    cd ..
+    cd /d "%SCRIPT_DIR%"
     if not defined NO_PAUSE pause
     exit /b 1
 )
-cd /D %~dp0
+cd /d "%SCRIPT_DIR%"
 echo Done.
 echo.
 
 REM Prepare release folder
-mkdir release_eng
+mkdir "%RELEASE_DIR%"
 
-if exist IMS\STANDARD.BNK (
+if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
     echo [4/5] Copying standard bank file...
-    copy IMS\STANDARD.BNK release_eng\ > nul
+    copy "%SRC_DIR%\IMS\STANDARD.BNK" "%RELEASE_DIR%\" > nul
 ) else (
     echo [4/5] Warning: IMS\STANDARD.BNK not found.
 )
 
-
 echo [5/5] Creating directory structure for release...
-copy build_eng\MidiPlayer.exe release_eng\JMPlayer_R2.5_ENG.exe
-copy K_icon.ico release_eng\K_icon.ico
-if exist SoundFonts xcopy SoundFonts release_eng\SoundFonts /E /I /Y
-if exist BK xcopy BK release_eng\BK /E /I /Y
-if exist etc\LICENSES.md copy etc\LICENSES.md release_eng\LICENSES.md
-if exist etc\.pdf copy etc\.pdf release_eng\.pdf
+copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.5e_ENG.exe"
+copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
+if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
+if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
+if exist "%SRC_DIR%\etc\LICENSES.md" copy "%SRC_DIR%\etc\LICENSES.md" "%RELEASE_DIR%\LICENSES.md"
+if exist "%SRC_DIR%\etc\.pdf" copy "%SRC_DIR%\etc\.pdf" "%RELEASE_DIR%\.pdf"
+
+REM Nuked-SC55 drop folder. The emulator itself is NOT shipped - it is not
+REM public domain and jmp is - so only the folder and its note go out.
+if not exist "%RELEASE_DIR%\NukedSC55" mkdir "%RELEASE_DIR%\NukedSC55"
+copy "%SCRIPT_DIR%\NukedSC55_README_ENG.txt" "%RELEASE_DIR%\NukedSC55\README.txt"
+if exist "%SCRIPT_DIR%\emulator-patch" xcopy "%SCRIPT_DIR%\emulator-patch" "%RELEASE_DIR%\emulator-patch" /E /I /Y
 
 if errorlevel 1 (
     echo.
@@ -108,15 +150,15 @@ echo.
 
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
-cd /D %~dp0release_eng
-windeployqt JMPlayer_R2.5_ENG.exe --release --no-translations --no-opengl-sw
+cd /d "%RELEASE_DIR%"
+windeployqt JMPlayer_R2.5e_ENG.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
     echo [WARNING] windeployqt had issues, but continuing...
 )
 
-cd /D %~dp0
+cd /d "%SCRIPT_DIR%"
 echo Done.
 echo.
 
@@ -125,30 +167,15 @@ echo ========================================
 echo BUILD COMPLETED SUCCESSFULLY!  (English UI)
 echo ========================================
 echo.
-echo Release folder: .\release_eng\
-echo Executable: .\release_eng\JMPlayer_R2.5_ENG.exe
-echo Icon: .\release_eng\K_icon.ico
+echo Release folder: %RELEASE_DIR%\
+echo Executable: %RELEASE_DIR%\JMPlayer_R2.5e_ENG.exe
 echo.
 
-if exist release_eng\JMPlayer_R2.5_ENG.exe (
-    for %%A in (release_eng\JMPlayer_R2.5_ENG.exe) do (
+if exist "%RELEASE_DIR%\JMPlayer_R2.5e_ENG.exe" (
+    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.5e_ENG.exe") do (
         echo Executable size: %%~zA bytes
     )
 )
 
 echo.
-echo Distribution Instructions:
-echo 1. Distribute the ENTIRE 'release_eng' folder
-echo 2. Include Qt6 DLLs (automatically copied by windeployqt)
-echo 3. Include K_icon.ico
-echo 4. Include LICENSE file (Qt LGPL + project license)
-echo 5. Provide source code access (GitHub link or zip)
-
-echo.
-echo LGPL Compliance:
-echo - Qt6 libraries are dynamically linked (DLL files)
-echo - Source code is available at [Your GitHub URL]
-echo - Users can replace Qt libraries with their own builds
-echo.
-
 if not defined NO_PAUSE pause

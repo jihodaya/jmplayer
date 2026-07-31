@@ -18,6 +18,7 @@ https://www.youtube.com/@jjome_Plus
     *   Dynamic instrument name cards displaying active FM patches.
 *   **Lyrics Display:** Basic lyrics support with syllable-level highlighting and text decoding (Johab/EUC-KR).
 *   **Audio Engine:** Software OPL3 synthesis via AdPlug and SoundFont (.sf2) playback powered by TinySoundFont.
+*   **Nuked-SC55 (optional):** Play through the Nuked-SC55 emulator with no virtual MIDI cable (no loopMIDI). A stock build stays silent — build it with the patch in [`emulator-patch/`](emulator-patch/). The emulator is not shipped with JMPlayer.
 
 ### 🛠️ Quick Build Guide
 
@@ -38,6 +39,7 @@ cd JMPlayer
 *   **Project Code:** Released under the Public Domain. Anyone is free to use, modify, and distribute.
 *   **Third-party Dependencies:** Dynamically linked to **Qt 6 (LGPL v3)** and **AdPlug (LGPL v2.1)** to comply with LGPL requirements.
 *   **Credits:** Thanks to **BK (병코돌고래)** for providing the sample song collection (`BK/` folder).
+*   **Nuked-SC55:** A separate program, not part of JMPlayer — by [nukeykt](https://github.com/nukeykt/Nuked-SC55) with the [GUI fork](https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float) by linoshkmalayil, under the MAME License (non-commercial). Only JMPlayer's own patch is included here.
 
 ### 🔗 Companion projects
 
@@ -68,6 +70,7 @@ Neither is required to use JMPlayer on its own.
     *   활성화된 FM 패치 정보를 보여주는 악기 이름 카드.
 *   **가사 표시:** 조합형(Johab) 및 완결형(EUC-KR) 가사 텍스트의 음절 단위 하이라이팅 표시.
 *   **오디오 엔진:** AdPlug 기반의 소프트웨어 OPL3 에뮬레이션 및 TinySoundFont 기반의 사운드폰트(.sf2) 재생.
+*   **Nuked-SC55 (선택):** 가상 MIDI 케이블(loopMIDI) 없이 Nuked-SC55 에뮬레이터로 재생. 원본 빌드는 소리가 나지 않으며, [`emulator-patch/`](emulator-patch/)의 패치로 직접 빌드해야 합니다. 에뮬레이터는 함께 배포되지 않습니다.
 
 ### 🛠️ 빠른 빌드 방법
 
@@ -88,6 +91,7 @@ cd JMPlayer
 *   **프로젝트 소스 코드:** 퍼블릭 도메인(Public Domain)으로 배포됩니다. 자유롭게 사용, 수정 및 배포하실 수 있습니다.
 *   **외부 라이브러리:** LGPL 라이선스 준수를 위해 **Qt 6 (LGPL v3)** 및 **AdPlug (LGPL v2.1)** 라이브러리와 동적 링크(DLL) 방식으로 빌드됩니다.
 *   **제공자 기여:** 음원 테스트를 위해 샘플 연주곡 세트(`BK/` 폴더)를 제공해 주신 **BK (병코돌고래)** 님께 감사드립니다.
+*   **Nuked-SC55:** JMPlayer의 일부가 아닌 별개의 프로그램입니다 — [nukeykt](https://github.com/nukeykt/Nuked-SC55) 원작, [GUI 포크](https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float)는 linoshkmalayil, MAME 라이선스(비상업). 여기에는 JMPlayer의 패치만 포함됩니다.
 
 ### 🔗 함께 쓰는 프로젝트
 

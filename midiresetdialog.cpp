@@ -12,8 +12,8 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 
-#include "../settingsmanager.h"
-#include "../uistrings.h"
+#include "settingsmanager.h"
+#include "uistrings.h"
 
 MidiResetDialog::MidiResetDialog(MidiReset* pReset, QWidget* parent)
     : QDialog(parent), m_pReset(pReset) {

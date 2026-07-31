@@ -3,7 +3,30 @@
 #include <QDebug>
 #include <iostream>
 #include <QLocalSocket>
+#include <QDir>
 #include "mainwindow.h"
+
+// Remove leftover extracted-MIDI temp files from a previous run.
+//
+// NOB/OKM/OKW are MIDI wrapped in a container; playback unwraps the MIDI into
+// <exe dir>/temp/{nob,oka}_XXXXXX.mid and hands that to the MIDI engine. Those
+// QTemporaryFiles delete themselves on a normal exit, but a crash or a kill
+// leaves them behind, and nothing swept them up on the next launch - so they
+// piled up over time. Clear them here, once, before the window opens.
+//
+// Only run after this process has claimed the single-instance server, so it
+// never deletes a file another running instance is using. Only our own
+// prefixes are touched; the temp folder itself is left in place.
+static void cleanLeftoverTempMidi()
+{
+    QDir tempDir(QCoreApplication::applicationDirPath() + "/temp");
+    if (!tempDir.exists())
+        return;
+    const QStringList stale =
+        tempDir.entryList(QStringList() << "nob_*.mid" << "oka_*.mid", QDir::Files);
+    for (const QString& name : stale)
+        tempDir.remove(name);
+}
 
 int main(int argc, char *argv[])
 {
@@ -35,6 +58,10 @@ int main(int argc, char *argv[])
         socket.disconnectFromServer();
         return 0; // Terminate this instance
     }
+
+    // This instance is the server (no other was running), so no other process
+    // is holding a temp file - safe to sweep leftovers from a past crash.
+    cleanLeftoverTempMidi();
 
     MainWindow window;
     window.show();

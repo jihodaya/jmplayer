@@ -1,0 +1,350 @@
+diff --git a/src/common/rom_loader.cpp b/src/common/rom_loader.cpp
+index d98c260..c5c2f90 100644
+--- a/src/common/rom_loader.cpp
++++ b/src/common/rom_loader.cpp
+@@ -82,7 +82,41 @@ LoadRomsetError LoadRomset(AllRomsetInfo&               romset_info,
+ 
+         if (!PickCompleteRomset(romset_info, result.romset))
+         {
+-            return LoadRomsetError::NoCompleteRomsets;
++            // Hash detection only recognises the dumps it has hashes for - the
++            // table carries SC-55 v1.21 alone, so a v1.00/v1.10/v1.20/v2.00 set
++            // finds nothing, and its rom1 can even hash as a DIFFERENT model's
++            // (v2.00's is listed under SC-155). The user just sees the emulator
++            // refuse to start with no useful explanation.
++            //
++            // Those dumps do follow the conventional filenames, so fall back to
++            // detection by name rather than giving up. Only reached when hashes
++            // produced nothing usable, so a recognised set still wins
++            // (2026-07-29).
++            AllRomsetInfo by_name{};
++            DetectRomsetsByFilename(rom_directory, by_name);
++
++            // DetectRomsetsByFilename fills in the conventional path for every
++            // romset WITHOUT checking any of them exist, so RomsetInfo::HasRom
++            // would answer yes for all of them and PickCompleteRomset would
++            // always return the first. Drop what isn't actually on disk before
++            // asking which set is complete.
++            for (size_t rs = 0; rs < ROMSET_COUNT; ++rs)
++            {
++                for (size_t loc = 0; loc < ROMLOCATION_COUNT; ++loc)
++                {
++                    auto& path = by_name.romsets[rs].rom_paths[loc];
++                    if (!path.empty() && !std::filesystem::exists(path))
++                    {
++                        path.clear();
++                    }
++                }
++            }
++
++            if (!PickCompleteRomset(by_name, result.romset))
++            {
++                return LoadRomsetError::NoCompleteRomsets;
++            }
++            romset_info = std::move(by_name);
+         }
+     }
+ 
+diff --git a/src/standard/lcd_sdl.cpp b/src/standard/lcd_sdl.cpp
+index 5612148..4f39e4c 100644
+--- a/src/standard/lcd_sdl.cpp
++++ b/src/standard/lcd_sdl.cpp
+@@ -3,8 +3,25 @@
+ #include "emu.h"
+ #include "mcu.h"
+ #include "output_sdl.h"
++#include <cmath>
+ #include <string>
+ 
++// Window scale for the panel GUI, set from --lcd-scale before the backend
++// starts. Kept here rather than threaded through the LCD interface because it
++// is purely a presentation choice and touches only this file.
++static float s_lcd_scale = 1.0f;
++
++void  LCD_SDL_SetScale(float scale)
++{
++    if (scale >= 0.25f && scale <= 4.0f)
++        s_lcd_scale = scale;
++}
++
++float LCD_SDL_Scale()
++{
++    return s_lcd_scale;
++}
++
+ const SDL_Rect lcd_button_regions_sc55[32] = {
+     {  38,  36, 67, 19}, // Power
+     {   0,   0,  0,  0},
+@@ -219,11 +236,20 @@ bool LCD_SDL_Backend::Start(lcd_t& lcd)
+         }
+     }
+ 
++    // The panel artwork fixes the window at 1120x233, which is a lot of desk
++    // space next to a host application. --lcd-scale shrinks (or enlarges) it.
++    //
++    // Everything is drawn through the renderer in artwork coordinates, so a
++    // render scale covers the whole GUI without touching a single draw call.
++    // Mouse coordinates are NOT scaled by SDL_RenderSetScale, so the event
++    // handler divides them back - see LCD_SDL_Scale().
++    const float scale = LCD_SDL_Scale();
++
+     m_window = SDL_CreateWindow(title.c_str(),
+                                 SDL_WINDOWPOS_UNDEFINED,
+                                 SDL_WINDOWPOS_UNDEFINED,
+-                                screen_width,
+-                                screen_height,
++                                (int32_t) (screen_width  * scale + 0.5f),
++                                (int32_t) (screen_height * scale + 0.5f),
+                                 SDL_WINDOW_SHOWN);
+     if (!m_window)
+         return false;
+@@ -233,6 +259,8 @@ bool LCD_SDL_Backend::Start(lcd_t& lcd)
+         return false;
+ 
+     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "BEST");
++    if (scale != 1.0f)
++        SDL_RenderSetScale(m_renderer, scale, scale);
+ 
+     m_texture = SDL_CreateTexture(
+         m_renderer, SDL_PIXELFORMAT_BGR888, SDL_TEXTUREACCESS_STREAMING, (int32_t)m_lcd->width, (int32_t)m_lcd->height);
+@@ -320,6 +348,30 @@ void LCD_SDL_Backend::HandleEvent(const SDL_Event& sdl_event)
+     // GUI Controls for SC-55
+     if ((m_lcd->mcu->romset == Romset::MK1 || m_lcd->mcu->romset == Romset::MK2 || m_lcd->mcu->romset == Romset::JV880) && background_enabled)
+     {
++        // Mouse events arrive in WINDOW pixels, but every hit-test below is in
++        // artwork coordinates, and SDL_RenderSetScale does not touch input. Undo
++        // the scale once here - deliberately shadowing the parameter so no use
++        // site below can be missed.
++        SDL_Event scaled_event = sdl_event;
++        if (const float s = LCD_SDL_Scale(); s != 1.0f)
++        {
++            switch (scaled_event.type)
++            {
++            case SDL_MOUSEBUTTONUP:
++            case SDL_MOUSEBUTTONDOWN:
++                scaled_event.button.x = (int32_t) (scaled_event.button.x / s);
++                scaled_event.button.y = (int32_t) (scaled_event.button.y / s);
++                break;
++            case SDL_MOUSEMOTION:
++                scaled_event.motion.x = (int32_t) (scaled_event.motion.x / s);
++                scaled_event.motion.y = (int32_t) (scaled_event.motion.y / s);
++                break;
++            default:
++                break;
++            }
++        }
++        const SDL_Event& sdl_event = scaled_event;
++
+         LCD_Knob* sc_knobs[] = {&sc_volume};
+         LCD_Knob* jv_knobs[] = {&jv_volume, &jv_encoder};
+         const SDL_Rect* button_regions = &lcd_button_regions_sc55[0];
+@@ -381,7 +433,9 @@ void LCD_SDL_Backend::HandleEvent(const SDL_Event& sdl_event)
+                 if (!knob->dragging)
+                     continue;
+                 float angle = (float) atan2(sdl_event.motion.y - (knob->y + (knob->h >> 1)), sdl_event.motion.x - (knob->x + (knob->w >> 1))) + DEG2RAD(270.0f);
+-                if (isnan(angle)) {
++                // std:: qualified: plain isnan is only in scope when <math.h>
++                // leaks it as a macro, which this toolchain does not do.
++                if (std::isnan(angle)) {
+                     break;
+                 }
+                 if (angle > M_PI * 2.0f) {
+diff --git a/src/standard/lcd_sdl.h b/src/standard/lcd_sdl.h
+index b309438..6f8d57c 100644
+--- a/src/standard/lcd_sdl.h
++++ b/src/standard/lcd_sdl.h
+@@ -96,3 +96,8 @@ private:
+     // When the user closes the window this becomes true
+     bool m_quit_requested = false;
+ };
++
++// Panel-GUI window scale (--lcd-scale). Set before the backend starts; clamped
++// to 0.25..4.0 and ignored outside that range.
++void  LCD_SDL_SetScale(float scale);
++float LCD_SDL_Scale();
+diff --git a/src/standard/main.cpp b/src/standard/main.cpp
+index cc9ff9b..bc0bcc0 100755
+--- a/src/standard/main.cpp
++++ b/src/standard/main.cpp
+@@ -239,6 +239,21 @@ void FE_BroadcastSerial(FE_Application& fe, const uint8_t sbyte)
+     }
+ }
+ 
++// Bytes arriving on the serial port are handed to the MAIN MCU's UART, the same
++// entry point a MIDI device uses - not to the sub-MCU's emulated RS-232 receiver.
++//
++// The serial path is a poor carrier for a host that is sequencing in real time.
++// The sub-MCU takes one byte per poll with a fixed inter-byte delay, imitating a
++// 31250-baud line, and its 1024-byte receive buffer has no overflow check:
++// SM_PostSerial advances the write pointer regardless of the read pointer, so
++// anything not yet consumed is silently overwritten. A real cable paces itself;
++// a named pipe does not. Feeding a sequencer through it produced wrong
++// instruments, stuck notes and unsteady tempo, and pacing the writes did not
++// cure it (measured 2026-07-29).
++//
++// MCU_PostUART is what the MIDI input path uses, and it is what made the same
++// music correct through loopMIDI. Routing here costs nothing: the emulator still
++// reads a byte stream, it just delivers it where MIDI belongs.
+ void FE_RouteSerial(FE_Application& fe, uint8_t sbyte)
+ {
+     if (sbyte == 0xF0)
+@@ -250,11 +265,14 @@ void FE_RouteSerial(FE_Application& fe, uint8_t sbyte)
+ 
+     if (fe.current_instance == 16)
+     {
+-        FE_BroadcastSerial(fe, sbyte);
++        for (size_t i = 0; i < fe.instances_in_use; ++i)
++        {
++            fe.instances[i].emu.PostMIDI(sbyte);
++        }
+     }
+     else
+     {
+-        FE_SendSerial(fe, fe.current_instance, sbyte);
++        fe.instances[fe.current_instance].emu.PostMIDI(sbyte);
+     }
+ }
+ 
+@@ -1136,6 +1154,17 @@ FE_ParseError FE_ParseCommandLine(int argc, char* argv[], FE_Parameters& result)
+             }
+             result.remote_pipe = reader.Arg();
+         }
++        else if (reader.Any("--lcd-scale"))
++        {
++            // Shrinks or enlarges the whole panel GUI. The artwork otherwise
++            // fixes the window at 1120x233, which is a lot of screen next to a
++            // host application.
++            if (!reader.Next())
++            {
++                return FE_ParseError::UnexpectedEnd;
++            }
++            LCD_SDL_SetScale(strtof(std::string(reader.Arg()).c_str(), nullptr));
++        }
+         else if (reader.Any("-a", "--audio-device"))
+         {
+             if (!reader.Next())
+@@ -1445,6 +1474,7 @@ Emulator options:
+   -r, --reset     none|gs|gm                    Reset system in GS or GM mode. (No GM in MK1 1.00 & 1.10)
+   -n, --instances <count>                       Set number of emulator instances.
+   --no-lcd                                      Run without LCDs.
++  --lcd-scale <factor>                          Scale the panel GUI window (0.25 - 4.0).
+   --nvram <filename>                            Saves and loads NVRAM to/from disk. JV-880 only.
+ 
+ ROM management options:
+@@ -1645,25 +1675,35 @@ int main(int argc, char *argv[])
+         return 1;
+     }
+ 
+-    if ((params.serial_type != Computerswitch::MIDI && !params.serial_port.empty()) && (frontend.romset==Romset::MK2 || frontend.romset==Romset::ST))
++    // A serial port is now opened whenever one is named, INCLUDING with the
++    // computer switch left at MIDI.
++    //
++    // That combination used to be impossible, and it is the one a host driving
++    // this over a pipe wants: FE_RouteSerial delivers arriving bytes to the main
++    // MCU's UART (see it for why), which is MIDI IN - and in the PC-1/PC-2/Mac
++    // switch positions the firmware reads the serial port and IGNORES MIDI IN,
++    // so those positions produce silence on this path (2026-07-29). The pipe is
++    // just the carrier here; the emulated RS-232 hardware is not involved, hence
++    // no romset restriction either.
++    if (!params.serial_port.empty())
+     {
+         if (!SERIAL_Init(frontend, params.serial_port))
+         {
+             fprintf(stderr, "ERROR: Failed to initialize the Serial I/O.\nWARNING: Continuing without Serial I/O...\n");
+             fflush(stderr);
+         }
+-        else
++        else if (params.serial_type != Computerswitch::MIDI)
+         {
++            // Device-to-host replies only leave by the serial port when the
++            // switch is in a serial position; at MIDI they go out MIDI OUT.
+             FE_SetSerialCallback(frontend);
+         }
+     }
+-    else if (params.serial_type != Computerswitch::MIDI && !params.serial_port.empty())
+-    {
+-        fprintf(stderr, "ERROR: Serial I/O available only for SC-55mk2 and SC-55st models.\nWARNING: Continuing without Serial I/O...\n");
+-        fflush(stderr);
+-    }
+     else
+     {
++        // No serial port named - the ordinary MIDI-device path. (The old
++        // "mk2/st only" complaint that stood here is gone with the romset
++        // restriction it reported.)
+         if (!params.midiout_device.empty() && frontend.romset == Romset::ST)
+         {
+             fprintf(stderr, "WARNING: MIDI Output is not available for SC-55st, continuing with only MIDI Input...");
+@@ -1726,10 +1766,15 @@ int main(int argc, char *argv[])
+ 
+     FE_PrintControls(frontend.romset);
+ 
+-    if (params.serial_type != Computerswitch::MIDI)
+-        FE_Run(frontend, true);
+-    else
+-        FE_Run(frontend, false);
++    // Pump the serial port whenever one is OPEN - not merely when the computer
++    // switch is in a serial position.
++    //
++    // FE_EventLoop calls SERIAL_Update() only under this flag, and that is the
++    // one place the overlapped read is issued; without it SERIAL_HasData() is
++    // false forever and the reader thread never sees a byte. Tying the flag to
++    // the switch made "pipe in, switch at MIDI" - the combination this build
++    // exists for - silently deliver nothing (2026-07-29).
++    FE_Run(frontend, !params.serial_port.empty());
+ 
+     FE_Quit(frontend);
+ 
+diff --git a/src/standard/serial_win32.cpp b/src/standard/serial_win32.cpp
+index a6d1730..7061d0e 100644
+--- a/src/standard/serial_win32.cpp
++++ b/src/standard/serial_win32.cpp
+@@ -415,16 +415,45 @@ void SERIAL_Quit()
+     return;
+ }
+ 
++// Reads the port itself rather than waiting for the event loop to do it.
++//
++// SERIAL_Update() is what issues and completes the overlapped read, and the
++// only caller was FE_EventLoop - which runs on an SDL_Delay(15) tick. So
++// whatever the host sent was picked up in ~15 ms clumps, and a fast passage
++// arrived bunched together instead of spread out: audibly behind the beat,
++// where loopMIDI (a callback, delivered at once) is not. The old loop also spun
++// at full speed holding serial_io_mutex, starving the very update it depended
++// on and burning a core (2026-07-29).
++//
++// Pumping here drops delivery latency to the poll interval below. The event
++// loop still calls SERIAL_Update() for writes; both take the mutex, so running
++// in both places is safe.
+ void SERIAL_Read_Updater(FE_Application& fe, serial_read_callback read_callback)
+ {
+     while (serial_thread_run)
+     {
+-        std::lock_guard<std::mutex> lock(serial_io_mutex);
++        SERIAL_Update();            // takes the mutex itself - do not hold it here
+ 
+-        if (SERIAL_HasData())
++        bool delivered = false;
++        for (;;)
+         {
+-            uint8_t sbyte = SERIAL_ReadUART();
+-            read_callback(fe, sbyte);        
++            uint8_t sbyte;
++            {
++                std::lock_guard<std::mutex> lock(serial_io_mutex);
++                if (!SERIAL_HasData())
++                    break;
++                sbyte = SERIAL_ReadUART();
++            }
++            // Routed outside the lock: it reaches into the emulator and has no
++            // business holding up the writer.
++            read_callback(fe, sbyte);
++            delivered = true;
+         }
++
++        // Only idles when the line is quiet, so a busy passage is never waited
++        // on. 250 us keeps the thread cheap while staying far below the ~320 us
++        // a single MIDI byte occupies on a real 31250-baud cable.
++        if (!delivered)
++            std::this_thread::sleep_for(std::chrono::microseconds(250));
+     }
+ }

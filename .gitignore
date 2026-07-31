@@ -30,3 +30,15 @@
 *.exe
 *.out
 *.app
+
+# Build output (out-of-tree scripts create these beside the sources)
+build/
+build_eng/
+release/
+release_eng/
+
+# Local-only full build: builds the patched Nuked-SC55 and copies ROMs in.
+# Never published - the emulator is not public domain and ROMs are Roland's.
+build_local_full.bat
+NukedSC55/
+temp/

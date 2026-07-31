@@ -17,7 +17,8 @@
 #include <fstream>
 #include <sstream>
 #include "jjomesynth.h"
-#include "midireset/midireset.h"
+#include "midireset.h"
+#include "sc55bridge.h"
 
 #pragma comment(lib, "winmm.lib")
 
@@ -102,6 +103,14 @@ public:
     // Internal Synth setting
     void setUseInternalSynth(bool useInternal, const QString& soundFontPath = QString());
     bool isUsingInternalSynth() const { return m_useInternalSynth; }
+
+    // Nuked-SC55 over a named pipe (sc55/sc55bridge.h) - a third destination
+    // alongside the internal synth and a real WinMM device. Selected from the
+    // device list like any other; MainWindow calls this instead of
+    // connectToDevice() when the user picks it.
+    bool connectToSc55();
+    Sc55Bridge* sc55Bridge() const { return m_pSc55; }
+    bool isUsingSc55() const { return m_pSc55 && m_bUseSc55; }
 
     bool loadMidiFile(const QString &filename);
     void setIsNobFile(bool isNob); // NOB 파일 여부 설정
@@ -244,6 +253,12 @@ private:
 
     // Internal Synth Support
     bool m_useInternalSynth = false;
+
+    // Nuked-SC55 child process + named pipe (sc55/sc55bridge.h). Created lazily
+    // the first time the user selects it, and kept alive while it remains the
+    // chosen device.
+    Sc55Bridge* m_pSc55 = nullptr;
+    bool m_bUseSc55 = false;
 
     // Sound-module reset before each new song (midireset/midireset.h). Wired
     // to sendRawSysEx in the constructor; sent from play()'s new-song branch.

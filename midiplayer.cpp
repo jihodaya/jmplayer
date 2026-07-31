@@ -159,6 +159,37 @@ bool MidiPlayer::connectToDevice(int deviceId)
     return false;
 }
 
+// Nuked-SC55 as a destination. Launches the emulator and takes over the send
+// path; see sc55/sc55bridge.h for why a pipe rather than a virtual MIDI cable.
+bool MidiPlayer::connectToSc55()
+{
+    if (connected)
+        disconnect(false);
+
+    if (!m_pSc55) {
+        m_pSc55 = new Sc55Bridge(this);
+        connect(m_pSc55, &Sc55Bridge::emulatorStopped, this, [this]() {
+            // The emulator went away by itself. Drop the connection so the next
+            // note doesn't vanish into nothing.
+            m_bUseSc55 = false;
+            connected = false;
+        });
+    }
+
+    if (!m_pSc55->Start())
+        return false;
+
+    m_useInternalSynth = false;
+    m_bUseSc55 = true;
+    connected = true;
+
+    for (int channel = 0; channel < 16; channel++)
+        originalChannelVolumes[channel] = 100;
+
+    qDebug() << "[MidiPlayer] Connected to Nuked-SC55 over the named pipe";
+    return true;
+}
+
 bool MidiPlayer::connectToDeviceByName(const QString& deviceName)
 {
     // Look the device up by name in the CURRENT enumeration instead of trusting
@@ -182,6 +213,22 @@ bool MidiPlayer::connectToDeviceByName(const QString& deviceName)
 
 void MidiPlayer::disconnect(bool async)
 {
+    // Nuked-SC55 has no WinMM handle to clean up - just silence it and shut the
+    // emulator down. Done before the lock: the bridge terminates a child
+    // process, which has nothing to do with the playback thread's state.
+    if (m_bUseSc55 && m_pSc55) {
+        if (connected) {
+            for (int channel = 0; channel < 16; channel++) {
+                m_pSc55->SendShort(0xB0 | channel, 0x7B, 0); // all notes off
+                m_pSc55->SendShort(0xB0 | channel, 0x78, 0); // all sound off
+            }
+        }
+        m_pSc55->Stop();
+        m_bUseSc55 = false;
+        connected = false;
+        return;
+    }
+
     HMIDIOUT localHMidiOut = nullptr;
     HANDLE localSysExEvent = nullptr;
 
@@ -459,7 +506,9 @@ void MidiPlayer::setVolume(int volume)
     QMutexLocker locker(&stateMutex);
     currentVolume = qBound(0, volume, 127);
 
-    if (connected && (hMidiOut || m_useInternalSynth)) {
+    // m_bUseSc55 included: the emulator has no hMidiOut, so it used to be left
+    // out of the volume update entirely and the slider did nothing (2026-07-29).
+    if (connected && (hMidiOut || m_useInternalSynth || m_bUseSc55)) {
         // Restart timer - this will delay the actual update until user stops moving slider
         locker.unlock(); // unlock before QTimer operation (QTimer must run on GUI thread)
         volumeUpdateTimer->start();
@@ -821,12 +870,28 @@ bool MidiPlayer::parseMidiFile(const QString &filename)
         trackLength = _byteswap_ulong(trackLength);
 
         std::streampos trackEnd = file.tellg() + std::streampos(trackLength);
+
+        // Guard against a truncated file: a bad or interrupted copy leaves a
+        // track header claiming more bytes than the file actually holds (three
+        // of the FF6 set are exactly this - rounded to a 4 KB boundary). If
+        // trackEnd points past EOF, the read loop below hits EOF, the stream
+        // fails, and file.tellg() then returns -1 - which is always < trackEnd,
+        // so the loop never ends and pushes garbage events until the process
+        // runs out of memory and is killed. Clamp trackEnd to the real end so
+        // the loop can terminate (2026-07-30).
+        const std::streamoff fileSize = static_cast<std::streamoff>(fileData.size());
+        if (static_cast<std::streamoff>(trackEnd) > fileSize)
+            trackEnd = std::streampos(fileSize);
+
         MidiTrack& track = tracks[trackNum];
         track.currentEventIndex = 0;
         unsigned char runningStatus = 0;
         unsigned long absoluteTick = 0;
 
-        while (file.tellg() < trackEnd) {
+        // file.good() as well as the position check: once any read below hits
+        // EOF the stream fails and tellg() returns -1, so the position test
+        // alone would spin forever.
+        while (file.good() && file.tellg() >= std::streampos(0) && file.tellg() < trackEnd) {
             unsigned long deltaTime = readVariableLength(file);
             absoluteTick += deltaTime;
 
@@ -838,6 +903,11 @@ bool MidiPlayer::parseMidiFile(const QString &filename)
 
             unsigned char status;
             file.read(reinterpret_cast<char*>(&status), 1);
+            // Truncated mid-event: stop before a garbage length drives a huge
+            // metaData/sysExData.resize() (readVariableLength on a failed stream
+            // can return up to 28 bits). The while-condition catches the next
+            // pass, but the resize happens before then, so bail out here.
+            if (!file) break;
             if (status < 0x80) {
                 status = runningStatus;
                 file.seekg(-1, std::ios::cur);
@@ -1006,6 +1076,13 @@ void MidiPlayer::sendMidiMessage(unsigned char status, unsigned char data1, unsi
         return;
     }
 
+    // Nuked-SC55: raw bytes down the named pipe instead of a WinMM handle.
+    if (m_bUseSc55 && m_pSc55) {
+        if (connected)
+            m_pSc55->SendShort(status, data1, data2);
+        return;
+    }
+
     if (!connected || !hMidiOut) return;
 
     DWORD message = status | (data1 << 8) | (data2 << 16);
@@ -1022,15 +1099,18 @@ void MidiPlayer::sendMidiMessage(DWORD message)
 void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
 {
     if (!connected || data.empty()) return;
-    // 내부 신스 모드에서는 hMidiOut이 nullptr이므로 SysEx를 보낼 수 없음
-    if (m_useInternalSynth || !hMidiOut) return;
 
-    // Prepare MIDIHDR structure for SysEx
-    MIDIHDR midiHeader;
-    memset(&midiHeader, 0, sizeof(MIDIHDR));
-
-    // Create complete SysEx message with F0 start and F7 end
+    // Build the complete framed message FIRST, before any device branch.
+    //
+    // Callers hand over the payload without framing - a song's SysEx event is
+    // stored from the manufacturer ID onwards (`41 10 42 12 ...`), the 0xF0
+    // having been consumed as the event's status byte. The Nuked-SC55 branch
+    // used to send that verbatim, so the emulator saw 0x41 as a DATA byte under
+    // whatever running status was current: no SysEx ever took effect (no GS
+    // reset, no display banner) and the stray bytes came out as notes at the
+    // wrong pitch and as clatter at the start of a song (2026-07-29).
     std::vector<unsigned char> sysExMessage;
+    sysExMessage.reserve(data.size() + 2);
     sysExMessage.push_back(0xF0); // SysEx start
 
     // Add the data (excluding any existing F0/F7 bytes)
@@ -1041,6 +1121,20 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
     }
 
     sysExMessage.push_back(0xF7); // SysEx end
+
+    // Nuked-SC55: the emulated UART is a byte stream, so SysEx goes down the
+    // same pipe as everything else - no MIDIHDR, no completion wait.
+    if (m_bUseSc55 && m_pSc55) {
+        m_pSc55->SendBytes(sysExMessage);
+        return;
+    }
+
+    // 내부 신스 모드에서는 hMidiOut이 nullptr이므로 SysEx를 보낼 수 없음
+    if (m_useInternalSynth || !hMidiOut) return;
+
+    // Prepare MIDIHDR structure for SysEx
+    MIDIHDR midiHeader;
+    memset(&midiHeader, 0, sizeof(MIDIHDR));
 
     // Set up the header
     midiHeader.lpData = reinterpret_cast<LPSTR>(sysExMessage.data());
@@ -1073,7 +1167,7 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
 void MidiPlayer::updateVolumeToDevice()
 {
     QMutexLocker locker(&stateMutex);
-    if (!connected || (!hMidiOut && !m_useInternalSynth)) return;
+    if (!connected || (!hMidiOut && !m_useInternalSynth && !m_bUseSc55)) return;
 
     // While the OPL register tunnel is running, the MIDI port IS the tunnel's
     // link (jmp -> Pico -> mt32-pi, one 31250 baud wire). Blasting 16 CC#7

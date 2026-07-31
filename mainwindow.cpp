@@ -7,7 +7,7 @@
 #include "constants.h"
 #include "settingsmanager.h"
 #include "oplstereodialog.h"
-#include "midireset/midiresetdialog.h"
+#include "midiresetdialog.h"
 #include <QCloseEvent>
 #include "nobfilehandler.h"
 #include "gybfilehandler.h"
@@ -1962,7 +1962,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.5";
+    QString title = "🎵 JJoMe MIDI Player v2.5e";
     
     if (currentNode) {
         if (currentNode->isFolder) {

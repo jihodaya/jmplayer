@@ -1410,6 +1410,57 @@ void MainWindow::onDeviceChanged(int index)
             
             midiPlayer->setUseInternalSynth(true, sfPath);
             midiPlayer->connectToDevice(-1); // Connect to internal synth
+        } else if (deviceName == Sc55Bridge::DeviceLabel()) {
+            // Never put a modal dialog up while the app is closing, and never
+            // let one open on top of another.
+            static bool bSc55DialogOpen = false;
+            if (m_isShuttingDown || bSc55DialogOpen)
+                return;
+            struct Guard {
+                bool& f;
+                explicit Guard(bool& r) : f(r) { f = true; }
+                ~Guard() { f = false; }
+            } guard(bSc55DialogOpen);
+
+            // Nuked-SC55 over the named pipe. Check first and explain rather
+            // than let the launch fail with nothing to go on: the usual causes
+            // are "not installed at all" and "mk1 ROMs, which have no serial
+            // port to emulate".
+            // Fall back to the internal synth when it can't be used. Set the
+            // combo directly with signals blocked - calling
+            // loadMidiDeviceSettings() here re-entered this slot (it ends by
+            // invoking onDeviceChanged itself), and if the *saved* device was
+            // also the SC-55 the dialog reappeared forever and the window could
+            // not be closed (2026-07-29).
+            auto fallBackToInternal = [this]() {
+                deviceComboBox->blockSignals(true);
+                deviceComboBox->setCurrentIndex(0);   // [JJoMe Synth (SoundFont)]
+                deviceComboBox->blockSignals(false);
+                SettingsManager::instance().setValue(
+                    "General/lastUsedDevice", deviceComboBox->currentText());
+                midiPlayer->setUseInternalSynth(
+                    true, SettingsManager::instance()
+                              .value("Synth/SoundFontPath", "").toString());
+                midiPlayer->connectToDevice(-1);
+            };
+
+            const QString reason = Sc55Bridge::UnavailableReason();
+            if (!reason.isEmpty()) {
+                QMessageBox::information(this,
+                    LSTR("Nuked SC-55", "Nuked SC-55"), reason);
+                fallBackToInternal();
+                return;
+            }
+
+            midiPlayer->setUseInternalSynth(false);
+            if (!midiPlayer->connectToSc55()) {
+                QMessageBox::warning(this,
+                    LSTR("Nuked SC-55 연결 실패", "Nuked SC-55 Connection Failed"),
+                    midiPlayer->sc55Bridge() ? midiPlayer->sc55Bridge()->errorString()
+                                             : QString());
+                fallBackToInternal();
+                return;
+            }
         } else {
             midiPlayer->setUseInternalSynth(false);
             // Connect by NAME first: on Win11's new MIDI stack the WinMM device
@@ -1475,6 +1526,17 @@ void MainWindow::loadMidiDevices()
     
     // Add internal synth option
     devices.insert(0, "[JJoMe Synth (SoundFont)]");
+
+    // Nuked-SC55, driven directly over a named pipe (sc55/sc55bridge.h) - no
+    // virtual MIDI cable needed. Always listed, even when it isn't installed:
+    // hiding it entirely would leave no way to discover the feature exists.
+    // Picking it while absent explains what to install instead of failing
+    // silently (see onDeviceChanged).
+    //
+    // Make sure the drop folder exists first - it lives under release\, which a
+    // rebuild wipes, so there would otherwise be nowhere to put the emulator.
+    Sc55Bridge::EnsureInstallDir();
+    devices.insert(1, Sc55Bridge::DeviceLabel());
 
     deviceComboBox->addItems(devices);
     deviceComboBox->setEnabled(true);
