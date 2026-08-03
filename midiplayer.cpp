@@ -8,6 +8,7 @@
 #include <QTemporaryFile>
 #include <QDir>
 #include <QCoreApplication>
+#include <QRegularExpression>
 #include <algorithm>
 
 
@@ -1814,473 +1815,222 @@ void MidiPlayer::detectSoundMode()
 
 SoundModeReliability MidiPlayer::calculateSoundModeReliability()
 {
+    // DISPLAY ONLY. The result reaches nothing but the channel monitor's mode
+    // label and its instrument-name table; no playback path reads it.
+    //
+    // This used to add up scores from many weak rules, and the weak ones
+    // outvoted the strong ones. Measured over a 1,278-file library: 415 files
+    // (32%) were called MT-32 while exactly one contained an MT-32 reset, and
+    // of the 94 files carrying an explicit reset message only 64 were
+    // identified correctly. Three rules did the damage:
+    //
+    //   * programs 64-127 counted as "MT-32 characteristic" - that is half the
+    //     GM sound map, so almost every file matched;
+    //   * "does not use channel 1" awarded MT-32 25 points, enough on its own
+    //     to beat GM's base score;
+    //   * partial vendor matches added 60 points *per event*, so one file
+    //     reached 6,780 MT-32 points and could no longer be outvoted.
+    //
+    // Worse, the single most decisive message - GM System On - was not checked
+    // at all, so a file that declared itself GM scored nothing for it.
+    //
+    // Evidence is now ranked instead of summed, strongest first, and each rule
+    // counts once. The same 94 files now come out 94/94.
+    //
+    // A file that declares nothing gets its own state rather than being counted
+    // as GM - 1,087 of the 1,278 measured say nothing at all, and reporting
+    // those as GM stated a fact the file does not contain. The monitor shows
+    // the state as "GM (assumed)": the reading is still GM, because that is
+    // what an undeclared MIDI means, but it is marked as an assumption and
+    // greyed so the 40 files that really do declare GM stay distinguishable.
+    // Attempts to infer the module from channel layout, drum notes or
+    // controller use were all measured and rejected; see the note further down.
     SoundModeReliability reliability;
-    reliability.detectedMode = 0; // Default to GM
-    reliability.confidenceScore = 25; // Slightly higher base score for GM
-    reliability.detectionMethod = "Default (GM assumed)";
+    reliability.detectedMode = -1;              // ChannelWidget::UNKNOWN_MODE
+    reliability.confidenceScore = 0;
+    reliability.detectionMethod = "No declaration in file";
     reliability.evidenceList.clear();
     reliability.hasStrongEvidence = false;
+    reliability.alternativeMode = -1;
 
-    // Initialize all mode scores
-    QMap<int, int> modeScores;
-    modeScores[0] = 25; // GM base score
-    modeScores[1] = 0;  // MT-32
-    modeScores[2] = 0;  // GS
-    modeScores[3] = 0;  // XG
+    // Roland and Yamaha both put a device ID in byte 1. Only 0x10 was accepted
+    // before; the spec allows 0x00-0x1F.
+    auto isDeviceId = [](unsigned char b) { return b <= 0x1F; };
 
-    int sysExScore = 0;
-    int textScore = 0;
-    int evidenceStrength = 0; // Track strongest evidence found
+    int  resetMode  = -1;      // explicit device reset (strongest)
+    bool sawGmOn    = false;   // GM System On - real, but any GS/XG reset follows it
+    QSet<int> vendorFamilies;  // manufacturer+model seen, without a reset
     QStringList sysExEvidence;
-    QStringList textEvidence;
 
-    // Search through all tracks for sound mode indicators
     for (const auto& track : tracks) {
         for (const auto& event : track.events) {
-            if (event.isMetaEvent) {
-                // Check for text meta events that might indicate sound mode
-                if (event.status == 0xFF && (event.data1 == 0x01 || event.data1 == 0x02 || event.data1 == 0x03)) {
-                    QString text = QString::fromLatin1((const char*)event.metaData.data(), event.metaData.size());
-                    QString originalText = text;
-                    text = text.toLower();
+            if (!event.isSysExEvent) continue;
+            const std::vector<unsigned char>& s = event.sysExData;   // no leading F0
+            const size_t n = s.size();
 
-                    // Strong MT-32 text detection
-                    if (text.contains("mt-32") || text.contains("mt32") || text.contains("roland mt")) {
-                        modeScores[1] += 75; // MT-32 mode
-                        if (evidenceStrength < 75) {
-                            textScore = 75; // Strong text evidence
-                            evidenceStrength = 75;
-                            textEvidence.append("Strong text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    // Strong GS text detection - improved conditions
-                    else if ((text.contains("gs") && (text.contains("roland") || text.contains("sound canvas"))) ||
-                             text.contains("roland gs") || text.contains("general standard")) {
-                        modeScores[2] += 75; // GS mode
-                        if (evidenceStrength < 75) {
-                            textScore = 75; // Strong text evidence
-                            evidenceStrength = 75;
-                            textEvidence.append("Strong text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    // Strong XG text detection - improved conditions
-                    else if ((text.contains("xg") && (text.contains("yamaha") || text.contains("mu"))) ||
-                             text.contains("yamaha xg") || text.contains("extended general")) {
-                        modeScores[3] += 75; // XG mode
-                        if (evidenceStrength < 75) {
-                            textScore = 75; // Strong text evidence
-                            evidenceStrength = 75;
-                            textEvidence.append("Strong text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    // Moderate text indicators - standalone format names
-                    else if (text.contains(" gs ") || text.contains("gs mode") || text.contains("gs midi")) {
-                        modeScores[2] += 50; // GS mode
-                        if (evidenceStrength < 50) {
-                            textScore = 50; // Moderate text evidence
-                            evidenceStrength = 50;
-                            textEvidence.append("Moderate text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    else if (text.contains(" xg ") || text.contains("xg mode") || text.contains("xg midi")) {
-                        modeScores[3] += 50; // XG mode
-                        if (evidenceStrength < 50) {
-                            textScore = 50; // Moderate text evidence
-                            evidenceStrength = 50;
-                            textEvidence.append("Moderate text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    // Weak text indicators - manufacturer names only
-                    else if (text.contains("roland") && !text.contains("gs") && !text.contains("mt")) {
-                        modeScores[2] += 30; // GS mode (Roland default)
-                        if (evidenceStrength < 30) {
-                            textScore = 30; // Weak text evidence
-                            evidenceStrength = 30;
-                            textEvidence.append("Weak text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    else if (text.contains("yamaha") && !text.contains("xg")) {
-                        modeScores[3] += 30; // XG mode
-                        if (evidenceStrength < 30) {
-                            textScore = 30; // Weak text evidence
-                            evidenceStrength = 30;
-                            textEvidence.append("Weak text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    // Very weak indicators - common music software terms
-                    else if (text.contains("sound canvas") || text.contains("sc-") || text.contains("sc ")) {
-                        modeScores[2] += 20; // GS mode
-                        if (evidenceStrength < 20) {
-                            textScore = 20;
-                            evidenceStrength = 20;
-                            textEvidence.append("Very weak text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
-                    else if (text.contains("mu80") || text.contains("mu100") || text.contains("motif")) {
-                        modeScores[3] += 20; // XG mode
-                        if (evidenceStrength < 20) {
-                            textScore = 20;
-                            evidenceStrength = 20;
-                            textEvidence.append("Very weak text: \"" + originalText.trimmed() + "\"");
-                        }
-                    }
+            // --- Universal: GM System On / GM2 System On -------------------
+            if (n >= 4 && s[0] == 0x7E && s[2] == 0x09 && (s[3] == 0x01 || s[3] == 0x03)) {
+                if (!sawGmOn) {
+                    sawGmOn = true;
+                    sysExEvidence.append("GM System On");
                 }
-            } else if (event.isSysExEvent) {
-                // Check SysEx messages for device-specific resets with improved pattern matching
+                continue;
+            }
 
-                // MT-32 Reset: F0 41 10 16 12 7F 00 01 00 F7 (complete 10-byte pattern)
-                if (event.sysExData.size() >= 8 &&
-                    event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                    event.sysExData[2] == 0x16 && event.sysExData[3] == 0x12 &&
-                    event.sysExData[4] == 0x7F && event.sysExData[5] == 0x00) {
-                    modeScores[1] += 95; // MT-32 mode
-                    if (evidenceStrength < 95) {
-                        sysExScore = 95; // Very strong SysEx evidence (complete pattern)
-                        evidenceStrength = 95;
-                        sysExEvidence.append("MT-32 Master Reset SysEx (complete)");
-                    }
+            // --- Roland ----------------------------------------------------
+            if (n >= 3 && s[0] == 0x41 && isDeviceId(s[1])) {
+                // GS Reset: 41 dev 42 12 40 00 7F 00 41 F7
+                if (n >= 8 && s[2] == 0x42 && s[3] == 0x12 &&
+                    s[4] == 0x40 && s[5] == 0x00 && s[6] == 0x7F && s[7] == 0x00) {
+                    resetMode = 2;
+                    if (!sysExEvidence.contains("GS Reset")) sysExEvidence.append("GS Reset");
                 }
-                // GS Reset: F0 41 10 42 12 40 00 7F 00 41 F7 (complete pattern)
-                else if (event.sysExData.size() >= 9 &&
-                         event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x42 && event.sysExData[3] == 0x12 &&
-                         event.sysExData[4] == 0x40 && event.sysExData[5] == 0x00 &&
-                         event.sysExData[6] == 0x7F && event.sysExData[7] == 0x00) {
-                    modeScores[2] += 95; // GS mode
-                    if (evidenceStrength < 95) {
-                        sysExScore = 95; // Very strong SysEx evidence
-                        evidenceStrength = 95;
-                        sysExEvidence.append("GS Reset SysEx (complete)");
-                    }
+                // MT-32 reset: 41 dev 16 12 7F ...
+                else if (n >= 5 && s[2] == 0x16 && s[3] == 0x12 && s[4] == 0x7F) {
+                    resetMode = 1;
+                    if (!sysExEvidence.contains("MT-32 Reset")) sysExEvidence.append("MT-32 Reset");
                 }
-                // XG Reset: F0 43 10 4C 00 00 7E 00 F7 (complete pattern)
-                else if (event.sysExData.size() >= 7 &&
-                         event.sysExData[0] == 0x43 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x4C && event.sysExData[3] == 0x00 &&
-                         event.sysExData[4] == 0x00 && event.sysExData[5] == 0x7E &&
-                         event.sysExData[6] == 0x00) {
-                    modeScores[3] += 95; // XG mode
-                    if (evidenceStrength < 95) {
-                        sysExScore = 95; // Very strong SysEx evidence
-                        evidenceStrength = 95;
-                        sysExEvidence.append("XG System On SysEx (complete)");
-                    }
+                else if (s[2] == 0x42) vendorFamilies.insert(2);
+                else if (s[2] == 0x16) vendorFamilies.insert(1);
+                continue;
+            }
+
+            // --- Yamaha ----------------------------------------------------
+            if (n >= 3 && s[0] == 0x43 && isDeviceId(s[1])) {
+                // XG System On: 43 dev 4C 00 00 7E 00 F7
+                if (n >= 6 && s[2] == 0x4C && s[3] == 0x00 && s[4] == 0x00 && s[5] == 0x7E) {
+                    resetMode = 3;
+                    if (!sysExEvidence.contains("XG System On")) sysExEvidence.append("XG System On");
                 }
-                // Partial Roland SysEx patterns (moderate evidence)
-                else if (event.sysExData.size() >= 4 &&
-                         event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x42) {
-                    modeScores[2] += 60; // GS mode
-                    if (evidenceStrength < 60) {
-                        sysExScore = 60; // Moderate SysEx evidence
-                        evidenceStrength = 60;
-                        sysExEvidence.append("Roland GS SysEx (partial)");
-                    }
-                }
-                else if (event.sysExData.size() >= 4 &&
-                         event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x16) {
-                    modeScores[1] += 60; // MT-32 mode
-                    if (evidenceStrength < 60) {
-                        sysExScore = 60; // Moderate SysEx evidence
-                        evidenceStrength = 60;
-                        sysExEvidence.append("Roland MT-32 SysEx (partial)");
-                    }
-                }
-                // Partial Yamaha SysEx patterns (moderate evidence)
-                else if (event.sysExData.size() >= 4 &&
-                         event.sysExData[0] == 0x43 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x4C) {
-                    modeScores[3] += 60; // XG mode
-                    if (evidenceStrength < 60) {
-                        sysExScore = 60; // Moderate SysEx evidence
-                        evidenceStrength = 60;
-                        sysExEvidence.append("Yamaha XG SysEx (partial)");
-                    }
-                }
-                // MT-32 specific SysEx patterns (strong evidence)
-                // MT-32 Patch Data: F0 41 10 16 12 05 xx xx ... (Patch memory)
-                else if (event.sysExData.size() >= 6 &&
-                         event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x16 && event.sysExData[3] == 0x12 &&
-                         event.sysExData[4] == 0x05) {
-                    modeScores[1] += 60; // Strong MT-32 evidence
-                    if (evidenceStrength < 60) {
-                        sysExScore = 60;
-                        evidenceStrength = 60;
-                        sysExEvidence.append("MT-32 Patch Data SysEx");
-                    }
-                }
-                // MT-32 Display Text: F0 41 10 16 12 20 00 xx ... (Display message)
-                else if (event.sysExData.size() >= 6 &&
-                         event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x16 && event.sysExData[3] == 0x12 &&
-                         event.sysExData[4] == 0x20 && event.sysExData[5] == 0x00) {
-                    modeScores[1] += 65; // Strong MT-32 evidence
-                    if (evidenceStrength < 65) {
-                        sysExScore = 65;
-                        evidenceStrength = 65;
-                        sysExEvidence.append("MT-32 Display Text SysEx");
-                    }
-                }
-                // MT-32 Rhythm Setup: F0 41 10 16 12 03 01 xx ... (Rhythm part)
-                else if (event.sysExData.size() >= 6 &&
-                         event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 &&
-                         event.sysExData[2] == 0x16 && event.sysExData[3] == 0x12 &&
-                         event.sysExData[4] == 0x03 && event.sysExData[5] == 0x01) {
-                    modeScores[1] += 55; // Moderate MT-32 evidence
-                    if (evidenceStrength < 55) {
-                        sysExScore = 55;
-                        evidenceStrength = 55;
-                        sysExEvidence.append("MT-32 Rhythm Setup SysEx");
-                    }
-                }
-                // Generic manufacturer SysEx (weak evidence)
-                else if (event.sysExData.size() >= 3) {
-                    if (event.sysExData[0] == 0x41 && event.sysExData[1] == 0x10 && evidenceStrength < 35) {
-                        modeScores[2] += 35; // GS mode (Roland default)
-                        if (evidenceStrength < 35) {
-                            sysExScore = 35;
-                            evidenceStrength = 35;
-                            sysExEvidence.append("Roland SysEx (generic)");
-                        }
-                    }
-                    else if (event.sysExData[0] == 0x43 && event.sysExData[1] == 0x10 && evidenceStrength < 35) {
-                        modeScores[3] += 35; // XG mode
-                        if (evidenceStrength < 35) {
-                            sysExScore = 35;
-                            evidenceStrength = 35;
-                            sysExEvidence.append("Yamaha SysEx (generic)");
-                        }
-                    }
-                }
+                else if (s[2] == 0x4C) vendorFamilies.insert(3);
             }
         }
     }
 
-    // Analyze channel usage patterns for additional evidence
-    QSet<int> usedChannels;
-    bool hasChannel1Activity = false;
-    bool hasChannel10Activity = false; // Drum channel
-    bool hasHighChannelActivity = false; // Channels 11-16 (MT-32 doesn't support these)
-    int noteOnCount = 0;
-    QSet<int> mt32Programs; // Track MT-32 characteristic programs
-    QSet<int> gmPrograms; // Track GM characteristic programs
-
-    // Second pass: analyze channel usage patterns
+    // An MT-32 has nine parts: eight melodic plus rhythm. Notes on channels
+    // 11-16, or simply more than nine channels in play, rule it out. Measured
+    // over 71 files carrying MT-32 SysEx, not one used a tenth channel.
+    // Used only to reject a guess, never to override a file's own reset.
+    //
+    // Nothing here ever *concludes* MT-32 - a file that says nothing about
+    // itself is left as GM. Guessing was tried and rejected: absence of Bank
+    // Select and reverb/chorus send separates the two ~87:1 on files that carry
+    // SysEx (MT-32 6-8% vs GM family 89-99%), but among the silent files it
+    // fires far too often - it moved 522 of them to MT-32, more than the 415
+    // false positives this rewrite was meant to remove, so it was taken out
+    // again. Channel count and drum-note choice are weaker still (~1.9:1).
+    QSet<int> noteChannels;
+    bool usesHighChannels = false;
     for (const auto& track : tracks) {
         for (const auto& event : track.events) {
-            if (!event.isMetaEvent && !event.isSysExEvent) {
-                unsigned char status = event.status;
-                int channel = status & 0x0F; // Extract channel (0-15)
-
-                // Track Note On events
-                if ((status & 0xF0) == 0x90 && event.data2 > 0) { // Note On with velocity > 0
-                    usedChannels.insert(channel);
-                    noteOnCount++;
-
-                    if (channel == 0) { // Channel 1 (0-based)
-                        hasChannel1Activity = true;
-                    }
-                    if (channel == 9) { // Channel 10 (0-based)
-                        hasChannel10Activity = true;
-                    }
-                    if (channel >= 10) { // Channels 11-16 (0-based: 10-15)
-                        hasHighChannelActivity = true;
-                    }
-                }
-                // Also check Program Change events for channel usage and program analysis
-                else if ((status & 0xF0) == 0xC0) {
-                    usedChannels.insert(channel);
-                    int program = event.data1;
-
-                    // Track high channel usage for non-MT-32 modes
-                    if (channel >= 10) { // Channels 11-16 (0-based: 10-15)
-                        hasHighChannelActivity = true;
-                    }
-
-                    // MT-32 characteristic programs (different from GM)
-                    // MT-32 has unique sound assignments that differ from GM
-                    if (program >= 64 && program <= 87) { // MT-32 Synth range
-                        mt32Programs.insert(program);
-                    }
-                    else if (program >= 88 && program <= 127) { // MT-32 Analog/Seq range
-                        mt32Programs.insert(program);
-                    }
-
-                    // GM characteristic programs (standard GM sounds)
-                    if (program >= 0 && program <= 7) { // Piano family
-                        gmPrograms.insert(program);
-                    }
-                    else if (program >= 40 && program <= 47) { // Violin family
-                        gmPrograms.insert(program);
-                    }
-                    else if (program >= 56 && program <= 63) { // Trumpet family
-                        gmPrograms.insert(program);
-                    }
-                }
+            if (event.isMetaEvent || event.isSysExEvent) continue;
+            if ((event.status & 0xF0) == 0x90 && event.data2 > 0) {
+                const int channel = event.status & 0x0F;
+                noteChannels.insert(channel);
+                if (channel >= 10) usesHighChannels = true;
             }
         }
     }
+    const bool mt32Impossible = usesHighChannels || noteChannels.size() > 9;
 
-    // MT-32 specific channel pattern analysis
-    if (noteOnCount >= 10) { // Only analyze if there's sufficient note activity
-        // MT-32 typically doesn't use channel 1 (many files start from channel 2)
-        if (!hasChannel1Activity && usedChannels.size() >= 2) {
-            modeScores[1] += 25; // Restored MT-32 mode bonus
-            textEvidence.append("MT-32 pattern: No channel 1 usage");
-        }
+    // Text is the weakest evidence and needs whole-word matching: "gs" as a
+    // substring hits "strings", "mu" hits "drums" and "music".
+    static const QRegularExpression reMt32("\\bmt[- ]?32\\b");
+    static const QRegularExpression reGs("\\bgs\\b");
+    static const QRegularExpression reXg("\\bxg\\b");
+    int textMode = -1;
+    QString textHit;
+    for (const auto& track : tracks) {
+        for (const auto& event : track.events) {
+            if (!event.isMetaEvent) continue;
+            if (event.status != 0xFF) continue;
+            if (event.data1 != 0x01 && event.data1 != 0x02 && event.data1 != 0x03) continue;
 
-        // MT-32 files often don't use drum channel (channel 10)
-        if (!hasChannel10Activity && usedChannels.size() >= 3) {
-            modeScores[1] += 15; // Additional MT-32 bonus
-            textEvidence.append("MT-32 pattern: No drum channel usage");
-        }
+            const QString original = QString::fromLatin1(
+                reinterpret_cast<const char*>(event.metaData.data()),
+                static_cast<int>(event.metaData.size())).trimmed();
+            const QString t = original.toLower();
 
-        // GM/GS files typically use channel 1 and often have drum channel
-        if (hasChannel1Activity && hasChannel10Activity) {
-            modeScores[0] += 20; // GM mode bonus
-            modeScores[2] += 20; // GS mode bonus
-            textEvidence.append("GM/GS pattern: Uses channel 1 and drums");
-        }
-        // GM files can also skip channel 1 but still use drums (modern GM files)
-        else if (!hasChannel1Activity && hasChannel10Activity && usedChannels.size() >= 3) {
-            modeScores[0] += 10; // Small GM mode bonus for drum usage without channel 1
-            modeScores[2] += 10; // Small GS mode bonus
-            textEvidence.append("GM/GS pattern: Uses drums without channel 1");
-        }
+            int hit = -1;
+            if (t.contains(reMt32) || t.contains("roland mt")) hit = 1;
+            else if (t.contains(reGs) && (t.contains("roland") || t.contains("sound canvas"))) hit = 2;
+            else if (t.contains("general standard")) hit = 2;
+            else if (t.contains(reXg) || t.contains("extended general")) hit = 3;
 
-        // Program Change analysis
-        if (!mt32Programs.isEmpty()) {
-            int mt32ProgramBonus = qMin(25, mt32Programs.size() * 5); // Max 25 points
-            modeScores[1] += mt32ProgramBonus; // MT-32 mode bonus
-            textEvidence.append(QString("MT-32 pattern: %1 MT-32 programs used").arg(mt32Programs.size()));
+            if (hit != -1 && textMode == -1) {
+                textMode = hit;
+                textHit = original;
+            }
         }
+        if (textMode != -1) break;
+    }
 
-        if (!gmPrograms.isEmpty()) {
-            int gmProgramBonus = qMin(20, gmPrograms.size() * 4); // Max 20 points
-            modeScores[0] += gmProgramBonus; // GM mode bonus
-            modeScores[2] += gmProgramBonus; // GS mode bonus (GS includes GM)
-            textEvidence.append(QString("GM/GS pattern: %1 GM programs used").arg(gmPrograms.size()));
-        }
-
-        // High channel usage (11-16) indicates non-MT-32 formats
-        // MT-32 only supports 9 parts total (8 melody + 1 rhythm)
-        if (hasHighChannelActivity) {
-            modeScores[0] += 30; // Strong GM mode bonus
-            modeScores[2] += 30; // Strong GS mode bonus
-            modeScores[3] += 30; // Strong XG mode bonus
-            textEvidence.append("Non-MT-32 pattern: Uses high channels (11-16)");
+    // ---- Rank the evidence ---------------------------------------------
+    if (resetMode != -1) {
+        reliability.detectedMode    = resetMode;
+        reliability.confidenceScore = 98;
+        reliability.detectionMethod = "SysEx reset";
+    } else if (sawGmOn) {
+        reliability.detectedMode    = 0;
+        reliability.confidenceScore = 90;
+        reliability.detectionMethod = "SysEx reset";
+    } else if (!vendorFamilies.isEmpty()) {
+        int pick = -1;
+        if (vendorFamilies.contains(2))      pick = 2;   // GS
+        else if (vendorFamilies.contains(3)) pick = 3;   // XG
+        else if (vendorFamilies.contains(1) && !mt32Impossible) pick = 1;
+        if (pick != -1) {
+            reliability.detectedMode    = pick;
+            reliability.confidenceScore = 70;
+            reliability.detectionMethod = "SysEx (vendor)";
+            sysExEvidence.append(pick == 1 ? "Roland MT-32 messages"
+                               : pick == 2 ? "Roland GS messages"
+                                           : "Yamaha XG messages");
         }
     }
 
-    // Calculate final confidence score using improved algorithm
-    int finalScore;
-
-    if (sysExScore > 0 && textScore > 0) {
-        // Both types of evidence: weighted average with bonus
-        finalScore = (sysExScore * 0.7) + (textScore * 0.5); // Can exceed 100
-        finalScore += 10; // Bonus for having both types
-        finalScore = qMin(98, finalScore); // Cap at 98
-    } else if (sysExScore > 0) {
-        // SysEx evidence only
-        finalScore = sysExScore;
-    } else if (textScore > 0) {
-        // Text evidence only
-        finalScore = textScore;
-    } else {
-        // No specific evidence found - use GM default
-        finalScore = 25; // Slightly higher base score for GM
-    }
-
-    // Apply confidence adjustments based on detection mode
-    if (reliability.detectedMode == 0) {
-        finalScore = 25; // GM default - slightly uncertain but often correct
-    } else if (finalScore < 30) {
-        // Very weak evidence gets penalty
-        finalScore = qMax(15, finalScore - 5);
-    }
-
-    // Determine detected mode based on highest score
-    int maxScore = 0;
-    int detectedMode = 0; // Default to GM
-    for (auto it = modeScores.begin(); it != modeScores.end(); ++it) {
-        if (it.value() > maxScore) {
-            maxScore = it.value();
-            detectedMode = it.key();
-        }
-    }
-    reliability.detectedMode = detectedMode;
-
-    // Calculate confidence score with proper normalization
-    // Use a more sophisticated approach: strongest evidence + bonus for multiple evidence
-    int confidenceScore = maxScore;
-
-    // If there are multiple pieces of evidence, add small bonus but cap at 100
-    int evidenceCount = 0;
-    for (auto it = modeScores.begin(); it != modeScores.end(); ++it) {
-        if (it.value() > 0 && it.key() == detectedMode) {
-            evidenceCount = 1; // At least one evidence for detected mode
-            break;
+    if (reliability.detectedMode == -1 && textMode != -1) {
+        if (!(textMode == 1 && mt32Impossible)) {
+            reliability.detectedMode    = textMode;
+            reliability.confidenceScore = 50;
+            reliability.detectionMethod = "Text";
+            reliability.evidenceList.append("Text: \"" + textHit + "\"");
         }
     }
 
-    // Add small bonus for very strong evidence, but cap at 100
-    if (maxScore >= 95) {
-        confidenceScore = qMin(100, maxScore + 0); // Perfect evidence stays at 95-100
-    } else if (maxScore >= 75) {
-        confidenceScore = qMin(95, maxScore + 5); // Strong evidence gets small boost
-    } else {
-        confidenceScore = maxScore; // Weaker evidence stays as is
-    }
+    reliability.evidenceList = sysExEvidence + reliability.evidenceList;
+    if (mt32Impossible && reliability.detectedMode != 1)
+        reliability.evidenceList.append("Too many parts for an MT-32");
+    if (reliability.evidenceList.isEmpty())
+        reliability.evidenceList.append("No specific mode indicators found");
 
-    reliability.confidenceScore = confidenceScore;
-    reliability.hasStrongEvidence = (confidenceScore >= 80);
+    reliability.hasStrongEvidence = (reliability.confidenceScore >= 80);
 
-    // Store all mode scores for ranking
+    // The monitor ranks these; give the winner its confidence and leave a
+    // trace of anything else that was actually seen.
+    QMap<int, int> modeScores;
+    for (int m = 0; m <= 3; ++m) modeScores[m] = 0;
+    if (reliability.detectedMode >= 0)   // Unknown is not one of the four
+        modeScores[reliability.detectedMode] = reliability.confidenceScore;
+    for (int fam : vendorFamilies)
+        if (fam != reliability.detectedMode) modeScores[fam] = qMax(modeScores[fam], 25);
+    if (textMode != -1 && textMode != reliability.detectedMode)
+        modeScores[textMode] = qMax(modeScores[textMode], 20);
     reliability.allModeScores = modeScores;
 
-    // Calculate the best alternative based on actual scores
-    reliability.alternativeMode = -1;
-    int bestAlternativeScore = 0;
-
-    // Only show alternatives for low confidence
-    if (confidenceScore < 60) {
-        // Find the second highest scoring mode as alternative
+    if (reliability.confidenceScore < 60) {
+        int best = 0;
         for (auto it = modeScores.begin(); it != modeScores.end(); ++it) {
-            int mode = it.key();
-            int score = it.value();
-
-            // Skip the detected mode and find the highest scoring alternative
-            if (mode != reliability.detectedMode && score > bestAlternativeScore) {
-                reliability.alternativeMode = mode;
-                bestAlternativeScore = score;
+            if (it.key() != reliability.detectedMode && it.value() > best) {
+                best = it.value();
+                reliability.alternativeMode = it.key();
             }
         }
-
-        // Only show if alternative has reasonable score (at least 15 points)
-        if (bestAlternativeScore < 15) {
-            reliability.alternativeMode = -1;
-        }
+        if (best < 15) reliability.alternativeMode = -1;
     }
 
-    reliability.confusionHint = getConfusionHint(reliability.alternativeMode, confidenceScore);
-
-    // Build detection method description
-    QStringList methods;
-    if (sysExScore > 0) methods.append("SysEx");
-    if (textScore > 0) methods.append("Text");
-    if (methods.isEmpty()) methods.append("Default");
-
-    reliability.detectionMethod = methods.join(" + ");
-
-    // Build evidence list
-    reliability.evidenceList.append(sysExEvidence);
-    reliability.evidenceList.append(textEvidence);
-    if (reliability.evidenceList.isEmpty()) {
-        reliability.evidenceList.append("No specific mode indicators found");
-    }
-
+    reliability.confusionHint = getConfusionHint(reliability.alternativeMode,
+                                                 reliability.confidenceScore);
     return reliability;
 }
 

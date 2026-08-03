@@ -43,6 +43,11 @@ public slots:
 
 public:
     enum SoundMode {
+        // The file said nothing about which module it targets. Distinct from
+        // GM_MODE, which now means the file actually declared GM - guessing GM
+        // from silence was reporting a certainty the file does not contain.
+        // Instrument names fall back to the GM table either way.
+        UNKNOWN_MODE = -1,
         GM_MODE = 0,    // General MIDI
         MT32_MODE = 1,  // Roland MT-32
         GS_MODE = 2,    // Roland GS

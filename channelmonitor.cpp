@@ -1261,7 +1261,14 @@ void ChannelMonitor::setSoundMode(ChannelWidget::SoundMode mode)
             soundModeLabel->setStyleSheet("font-family: 'Malgun Gothic', sans-serif; font-weight: bold; font-size: 12px; color: #ffd600; padding: 5px 10px; background-color: #222211; border: 1px solid #ffd600; border-radius: 4px;");
             break;
         default:
-            modeText = "Mode: Unknown" + currentReliability.confusionHint;
+            // UNKNOWN_MODE: the file declared nothing, which is the case for
+            // 85% of them. Saying only "Unknown" was honest but told the user
+            // nothing - and it hid what the player is actually doing, since a
+            // MIDI that declares nothing is read as GM by definition and the
+            // instrument names above come from the GM table. So name the
+            // assumption instead, and keep it grey so a declared mode still
+            // stands out at a glance.
+            modeText = "Mode: GM (assumed)" + currentReliability.confusionHint;
             soundModeLabel->setStyleSheet("font-family: 'Malgun Gothic', sans-serif; font-weight: bold; font-size: 12px; color: #aaaaaa; padding: 5px 10px; background-color: #1c1c1c; border: 1px solid #aaaaaa; border-radius: 4px;");
             break;
     }
@@ -1417,7 +1424,13 @@ void ChannelMonitor::updateSoundModeReliability(const SoundModeReliability& reli
     QString referenceNote;
     QString confidenceStyle;
 
-    if (reliability.confidenceScore < 40) {
+    if (reliability.detectedMode == ChannelWidget::UNKNOWN_MODE) {
+        // Nothing was detected, so there is no confidence to report - a
+        // percentage here would only invite reading it as a weak GM guess.
+        confidenceText = reliability.detectionMethod;
+        referenceNote = " - reading it as GM, the standard default";
+        confidenceStyle = "font-size: 12px; color: #CCCCCC; padding: 3px;";
+    } else if (reliability.confidenceScore < 40) {
         referenceNote = " - Note: High chance of false positive";
         confidenceStyle = "font-size: 12px; color: #CCCCCC; padding: 3px;"; // Larger text, neutral gray
     } else if (reliability.confidenceScore < 80) {
@@ -1439,7 +1452,7 @@ void ChannelMonitor::updateSoundModeReliability(const SoundModeReliability& reli
     if (!reliability.evidenceList.isEmpty()) {
         tooltipText += "Evidence found:\n" + reliability.evidenceList.join("\n");
     } else {
-        tooltipText += "No specific mode indicators found - using GM as default";
+        tooltipText += "No specific mode indicators found - instrument names fall back to GM";
     }
     confidenceLabel->setToolTip(tooltipText);
 
@@ -1449,7 +1462,7 @@ void ChannelMonitor::updateSoundModeReliability(const SoundModeReliability& reli
     if (!reliability.evidenceList.isEmpty()) {
         soundModeLabel->setToolTip("Detection evidence:\n" + reliability.evidenceList.join("\n"));
     } else {
-        soundModeLabel->setToolTip("No specific evidence - assumed GM compatible");
+        soundModeLabel->setToolTip("No specific evidence - instrument names fall back to GM");
     }
 }
 
