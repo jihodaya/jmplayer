@@ -21,7 +21,7 @@ set RELEASE_DIR=%SCRIPT_DIR%release
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player R2.5e
+echo JJoMe MIDI Player R2.5f
 echo License-Compliant Build Script
 echo ========================================
 echo.
@@ -120,7 +120,7 @@ if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
 )
 
 echo [5/5] Creating directory structure for release...
-copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.5e.exe"
+copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.5f.exe"
 copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
 if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
 if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
@@ -145,7 +145,7 @@ echo.
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
 cd /d "%RELEASE_DIR%"
-windeployqt JMPlayer_R2.5e.exe --release --no-translations --no-opengl-sw
+windeployqt JMPlayer_R2.5f.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
@@ -162,11 +162,11 @@ echo BUILD COMPLETED SUCCESSFULLY!
 echo ========================================
 echo.
 echo Release folder: %RELEASE_DIR%\
-echo Executable: %RELEASE_DIR%\JMPlayer_R2.5e.exe
+echo Executable: %RELEASE_DIR%\JMPlayer_R2.5f.exe
 echo.
 
-if exist "%RELEASE_DIR%\JMPlayer_R2.5e.exe" (
-    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.5e.exe") do (
+if exist "%RELEASE_DIR%\JMPlayer_R2.5f.exe" (
+    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.5f.exe") do (
         echo Executable size: %%~zA bytes
     )
 )

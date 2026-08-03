@@ -268,7 +268,14 @@ bool GybPlayer::loadFile(const QString& fileName)
     m_opl     = new InterceptingOpl(m_sampleRate, m_oplKeyOn, m_oplVolume, m_oplRegA, m_oplRegB);
     m_backend = new GybBackend(m_opl);
 
-    QByteArray fbytes = QFile::encodeName(fileName);
+    // toUtf8, NOT QFile::encodeName. The backend turns this narrow string
+    // straight back into a QString with QString::fromStdString, which is UTF-8,
+    // whereas encodeName() produces the Windows ANSI codepage - so a Korean
+    // filename came back mangled and the file simply was not found. Measured:
+    // "한글.GYB" encodes to c7 d1 b1 db (CP949) and reads back as garbage, while
+    // toUtf8 round-trips exactly. The .BNK lookups inside the backend keep using
+    // encodeName because those go to AdPlug's binio, which really does want ANSI.
+    QByteArray fbytes = fileName.toUtf8();
     if (!m_backend->load(fbytes.constData(), m_provider)) {
         delete m_backend; m_backend = nullptr;
         delete m_opl;     m_opl     = nullptr;

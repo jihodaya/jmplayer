@@ -13,7 +13,7 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | `.mid` `.midi` | Standard MIDI | SoundFont (JJoMe Synth) or system MIDI device | – |
 | `.nob` | Oksori karaoke (MIDI + Johab lyrics) | SoundFont / MIDI device | ✔ syllable sync |
 | `.oka` | Oksori karaoke (OPL) | OPL3 emulation | ✔ syllable sync |
-| `.okm` | Oksori karaoke (MIDI) | SoundFont / MIDI device | ✔ syllable sync |
+| `.okm` `.okw` | Oksori karaoke (MIDI) | SoundFont / MIDI device | ✔ syllable sync |
 | `.gyb` | Gayobang karaoke (OPL) — Korean & English releases | OPL3 emulation | ✔ syllable sync |
 | `.ims` (+`.iss`) | IMS AdLib music (+ISS lyric file) | OPL3 emulation | ✔ (with .iss) |
 | `.rol` | AdLib Visual Composer | OPL3 emulation | – |

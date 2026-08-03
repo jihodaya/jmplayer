@@ -376,6 +376,27 @@ ImsPlayer::~ImsPlayer()
 static const int IMS_TITLE_OFFSET = 6;
 static const int IMS_TITLE_SIZE   = 30;
 
+// 제목 칸은 30바이트 고정이고, 그 안의 첫 NUL이 문자열의 끝이다. 칸 전체를 그대로
+// 변환하면 그 NUL이 U+0000 글자로 살아남아 목록에 □로 그려지고(trimmed()는 NUL을
+// 공백으로 치지 않아 못 거른다), NUL 뒤에 남아 있던 이전 제목의 찌꺼기까지 제목에
+// 딸려 붙는다 - 실제 라이브러리 5059개 중 1580개가 그런 잔여물을 갖고 있다.
+// 재생을 시작하면 멀쩡해 보이는 건 그때는 AdPlug gettitle()이 NUL에서 끊어 주기
+// 때문으로, 여기서도 같게 맞춘다.
+static QString decodeImsTitleCp1361(const QByteArray& field)
+{
+    const int end = field.indexOf('\0');
+    const QByteArray raw = (end >= 0) ? field.left(end) : field;
+    if (raw.isEmpty()) return QString();
+
+    int wideLen = MultiByteToWideChar(1361, 0, raw.constData(), raw.size(), NULL, 0);
+    if (wideLen > 0) {
+        std::wstring wideStr(wideLen, L'\0');
+        MultiByteToWideChar(1361, 0, raw.constData(), raw.size(), &wideStr[0], wideLen);
+        return QString::fromStdWString(wideStr).trimmed();
+    }
+    return QString::fromLocal8Bit(raw.constData(), raw.size()).trimmed();
+}
+
 QString ImsPlayer::extractTitleQuick(const QString& fileName)
 {
     QString lower = fileName.toLower();
@@ -391,16 +412,7 @@ QString ImsPlayer::extractTitleQuick(const QString& fileName)
         f.close();
 
         // 조합형 한글(EUC-KR / KS-1361) → UTF-16 변환 시도
-        QString title;
-        int wideLen = MultiByteToWideChar(1361, 0, raw.constData(), raw.size(), NULL, 0);
-        if (wideLen > 0) {
-            std::wstring wideStr(wideLen, L'\0');
-            MultiByteToWideChar(1361, 0, raw.constData(), raw.size(), &wideStr[0], wideLen);
-            title = QString::fromStdWString(wideStr);
-        } else {
-            title = QString::fromLocal8Bit(raw.constData(), strnlen(raw.constData(), IMS_TITLE_SIZE));
-        }
-        title = title.trimmed();
+        QString title = decodeImsTitleCp1361(raw);
 
         // 파일명과 동일하면 의미 없으므로 반환 안 함
         if (title.isEmpty() || title == QFileInfo(fileName).baseName()) return QString();
@@ -425,17 +437,7 @@ QString ImsPlayer::extractTitleQuick(const QByteArray& fileData, const QString& 
         QByteArray raw = fileData.mid(IMS_TITLE_OFFSET, IMS_TITLE_SIZE);
 
         // 조합형 한글(EUC-KR / KS-1361) → UTF-16 변환 시도
-        QString title;
-        int wideLen = MultiByteToWideChar(1361, 0, raw.constData(), raw.size(), NULL, 0);
-        if (wideLen > 0) {
-            std::wstring wideStr(wideLen, L'\0');
-            MultiByteToWideChar(1361, 0, raw.constData(), raw.size(), &wideStr[0], wideLen);
-            title = QString::fromStdWString(wideStr);
-        } else {
-            title = QString::fromLocal8Bit(raw.constData(), strnlen(raw.constData(), IMS_TITLE_SIZE));
-        }
-        title = title.trimmed();
-        return title;
+        return decodeImsTitleCp1361(raw);
     }
     return QString();
 }

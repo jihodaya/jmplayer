@@ -13,7 +13,7 @@ JMPlayer는 표준 MIDI와 1990년대 한국 DOS 시절 음악/노래방 포맷�
 | `.mid` `.midi` | 표준 MIDI | 사운드폰트(JJoMe Synth) 또는 시스템 MIDI 장치 | – |
 | `.nob` | 옥소리 노래방 (MIDI + 조합형 가사) | 사운드폰트 / MIDI 장치 | ✔ 음절 싱크 |
 | `.oka` | 옥소리 노래방 (OPL) | OPL3 에뮬레이션 | ✔ 음절 싱크 |
-| `.okm` | 옥소리 노래방 (MIDI) | 사운드폰트 / MIDI 장치 | ✔ 음절 싱크 |
+| `.okm` `.okw` | 옥소리 노래방 (MIDI) | 사운드폰트 / MIDI 장치 | ✔ 음절 싱크 |
 | `.gyb` | 가요방 노래방 (OPL) — 국내판·수출판 모두 | OPL3 에뮬레이션 | ✔ 음절 싱크 |
 | `.ims` (+`.iss`) | IMS 애드립 음악 (+ISS 가사 파일) | OPL3 에뮬레이션 | ✔ (.iss 동반 시) |
 | `.rol` | AdLib Visual Composer | OPL3 에뮬레이션 | – |

@@ -260,7 +260,9 @@ bool OkaPlayer::loadFile(const QString& fileName)
     if (!m_externalBankPath.isEmpty())
         m_backend->setExternalBankPath(m_externalBankPath);
 
-    QByteArray fbytes = QFile::encodeName(fileName);
+    // toUtf8, not encodeName - see the matching note in GybPlayer::loadFile.
+    // OkaBackend::load reads this back with QString::fromStdString (UTF-8).
+    QByteArray fbytes = fileName.toUtf8();
     std::cout << "[OkaPlayer] Calling backend->load..." << std::endl << std::flush;
     if (!m_backend->load(fbytes.constData())) {
         delete m_backend; m_backend = nullptr;

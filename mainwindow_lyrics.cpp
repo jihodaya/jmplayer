@@ -271,6 +271,50 @@ bool MainWindow::updateLyricsWindowContent(const QString& filePath, bool isNobFi
                 qDebug() << "[MainWindow]" << context << ": Failed to detect marker channel";
             }
 
+            // Prefer the lyric block's own column layout - it carries per
+            // syllable timing anchored at song tick 0, so it needs no intro
+            // trimming and no guess about which notes are sung. The guide
+            // channel is used only to calibrate the column scale.
+            QList<unsigned long> guideTicks;
+            for (const auto& m : allMarkers) guideTicks.append(m.tick);
+            QList<unsigned long> columnTicks =
+                NobFileHandler::extractLyricColumnTicks(filePath, guideTicks);
+
+            // Those ticks belong to the syllables STORED IN THE FILE, one for
+            // one. If the lyrics on screen came from an edited .txt they are a
+            // different list, and pairing them by index makes the highlight
+            // drift from the point the two diverge - which is exactly what an
+            // edited song did (0127: 284 syllables of text against 300 columns).
+            // Only use the column timing when the two still line up.
+            int displayedUnits = 0;
+            for (const QString& line : displayedLyrics) {
+                for (const QChar& c : line) {
+                    if (c != ' ' && c != '-' && c != '@') displayedUnits++;
+                }
+            }
+            if (!columnTicks.isEmpty() && columnTicks.size() != displayedUnits) {
+                qDebug() << "[MainWindow]" << context << ": lyrics have" << displayedUnits
+                         << "syllables but the block has" << columnTicks.size()
+                         << "- ignoring column timing";
+                columnTicks.clear();
+            }
+
+            if (!columnTicks.isEmpty()) {
+                currentMarkerEvents = allMarkers;
+                currentLyricMarkerTicks = columnTicks;
+                resetLyricSyncState();
+                qDebug() << "[MainWindow]" << context << ": using column timing,"
+                         << columnTicks.size() << "syllables";
+            } else {
+
+            // Same intro trim as the manual channel switch, so auto-detected
+            // playback and a hand-picked channel behave identically.
+            int droppedIntro = dropIntroMarkers(allMarkers);
+            if (droppedIntro > 0) {
+                qDebug() << "[MainWindow]" << context << ": dropped" << droppedIntro
+                         << "intro markers";
+            }
+
             currentMarkerEvents = allMarkers;
             currentLyricMarkerTicks.clear();
             resetLyricSyncState();
@@ -283,6 +327,7 @@ bool MainWindow::updateLyricsWindowContent(const QString& filePath, bool isNobFi
                 qDebug() << "[MainWindow]" << context << ": Applied" << currentLyricMarkerTicks.size()
                          << "markers from channel" << (markerChannel > 0 ? markerChannel : -1);
             }
+            }   // end of the column-timing fallback
         } else {
             currentMarkerEvents.clear();
             currentLyricMarkerTicks.clear();
@@ -603,6 +648,29 @@ bool MainWindow::updateLyricsWindowContent(const QString& filePath, bool isNobFi
         lyrics = midiPlayer->extractLyrics();
         displayedLyrics = lyrics;
         currentLyrics = displayedLyrics;
+
+        // Karaoke MIDI timestamps every lyric event, so take the timing from the
+        // file instead of leaving the list empty - which is what made the whole
+        // song highlight line by line from the very first bar, straight through
+        // the introduction (2026-07-31).
+        if (!displayedLyrics.isEmpty()) {
+            QList<unsigned long> syllableTicks = midiPlayer->extractLyricSyllableTicks();
+
+            int units = 0;
+            for (const QString& line : displayedLyrics) {
+                for (const QChar& c : line) {
+                    if (c != ' ' && c != '-' && c != '@') units++;
+                }
+            }
+
+            if (syllableTicks.size() == units) {
+                currentLyricMarkerTicks = syllableTicks;
+            } else if (!syllableTicks.isEmpty()) {
+                qDebug() << "[MainWindow]" << context << ": lyric ticks" << syllableTicks.size()
+                         << "do not match" << units << "syllables - showing lyrics without sync";
+            }
+        }
+
         qDebug() << "[MainWindow]" << context << ": Displaying" << displayedLyrics.size() << "lyric lines from MIDI";
     }
 
@@ -664,11 +732,11 @@ void MainWindow::onLyricChannelChanged(int newChannel)
         }
     }
 
-    if (!isOkm && newChannel == 11 && allMarkers.size() > 1) {
-        unsigned long gap = allMarkers[1].tick - allMarkers[0].tick;
-        if (gap >= 768) {
-            allMarkers.removeFirst();
-            qDebug() << "[MainWindow] onLyricChannelChanged: Removed intro marker with gap" << gap;
+    if (!isOkm) {
+        int dropped = dropIntroMarkers(allMarkers);
+        if (dropped > 0) {
+            qDebug() << "[MainWindow] onLyricChannelChanged: dropped" << dropped
+                     << "intro markers on channel" << newChannel;
         }
     }
 
@@ -697,6 +765,52 @@ QStringList MainWindow::expandLyricsForRepeat(const QStringList& originalLyrics,
 {
     Q_UNUSED(isNobFile);
     return originalLyrics;
+}
+
+int MainWindow::dropIntroMarkers(QList<MidiPlayer::MarkerEvent>& markers) const
+{
+    // A guide channel that plays from the very top of the song carries the
+    // intro melody as well, and those leading notes made the lyrics scroll long
+    // before the singing (0127.NOB: markers from 0.0 s, vocal enters at 22.3 s).
+    //
+    // The intro is sparse and the sung part is dense, so the boundary is the
+    // first run of gaps at or below the median. A channel that already waits -
+    // its first note is more than a beat in - is the vocal itself and is left
+    // alone (0287.NOB starts at 17.3 s and must not be trimmed). Refusing to
+    // drop more than a quarter of the markers keeps a whole verse from being
+    // eaten if the guess is wrong (2026-07-31).
+    if (markers.size() < 8) return 0;
+
+    // One beat at the TPQN these files use (192); the same constant the rest of
+    // the lyric code assumes. Anything starting later than that already waits
+    // for the vocal.
+    const unsigned long oneBeat = 192;
+    if (markers.first().tick > oneBeat) return 0;
+
+    QVector<unsigned long> gaps;
+    gaps.reserve(markers.size() - 1);
+    for (int i = 1; i < markers.size(); ++i)
+        gaps.append(markers[i].tick - markers[i - 1].tick);
+
+    QVector<unsigned long> sorted = gaps;
+    std::sort(sorted.begin(), sorted.end());
+    const unsigned long median = sorted[sorted.size() / 2];
+    if (median == 0) return 0;
+
+    const int run = 4;
+    const int limit = markers.size() / 4;
+    for (int i = 0; i + run < gaps.size(); ++i) {
+        bool tight = true;
+        for (int k = 0; k < run; ++k) {
+            if (gaps[i + k] > median) { tight = false; break; }
+        }
+        if (tight) {
+            if (i == 0 || i > limit) return 0;
+            markers.erase(markers.begin(), markers.begin() + i);
+            return i;
+        }
+    }
+    return 0;
 }
 
 QList<MidiPlayer::MarkerEvent> MainWindow::adjustMarkersForLyrics(const QList<MidiPlayer::MarkerEvent>& markers,

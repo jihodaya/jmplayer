@@ -85,6 +85,19 @@ public:
      */
     static QList<unsigned long> extractLyricMarkerTicks(const QString& filePath);
 
+    // Per-syllable ticks read from the lyric block's own layout, the way OKM
+    // carries an explicit sync table. Empty when the file does not fit the
+    // model. `guideTicks` are note ticks from the detected guide channel, used
+    // only to calibrate the column scale.
+    static QList<unsigned long> extractLyricColumnTicks(const QString& filePath,
+                                                        const QList<unsigned long>& guideTicks);
+
+    // Ticks per lyric column - see extractLyricColumnTicks() for how this was
+    // measured.
+    static double lyricTicksPerColumn();
+
+    static QString decodeJohab(const QByteArray& data);
+
     /**
      * @brief NOB 파일의 마커 채널 자동 감지
      * @param filePath NOB 파일 경로
@@ -100,12 +113,6 @@ private:
     static constexpr unsigned char NOB_FLAG = 0x08;  // 0x00의 값
     static constexpr int MIDI_OFFSET = 0x45;         // MIDI 시작 오프셋
 
-    /**
-     * @brief 조합형 한글(Johab) 디코딩
-     * @param data 원본 바이트 데이터
-     * @return 디코딩된 문자열
-     */
-    static QString decodeJohab(const QByteArray& data);
 };
 
 #endif // NOBFILEHANDLER_H

@@ -352,6 +352,10 @@ private:
     void validateAndCleanPlaylistTree(PlaylistTreeNode* node);
     void resetLyricSyncState();
     QStringList expandLyricsForRepeat(const QStringList& originalLyrics, bool isNobFile) const;
+    // Trim intro notes off a guide channel that plays from the top of the song.
+    // Returns how many were removed; modifies the list in place.
+    int dropIntroMarkers(QList<MidiPlayer::MarkerEvent>& markers) const;
+
     QList<MidiPlayer::MarkerEvent> adjustMarkersForLyrics(const QList<MidiPlayer::MarkerEvent>& markers,
                                                           const QStringList& lyrics) const;
 };

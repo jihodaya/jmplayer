@@ -4,6 +4,7 @@
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
 #include "imsplayer.h"
+#include "midiplayer.h"
 #include <QFileInfoList>
 #include <QDir>
 
@@ -74,6 +75,14 @@ void FolderScanner::addFolderStructureToNode(PlaylistTreeNode* parentNode, const
             QString imsTitle = ImsPlayer::extractTitleQuick(fileInfo.absoluteFilePath());
             if (!imsTitle.isEmpty()) {
                 displayName += " - " + imsTitle;
+            }
+        } else if (fileInfo.fileName().endsWith(".mid", Qt::CaseInsensitive) ||
+                   fileInfo.fileName().endsWith(".midi", Qt::CaseInsensitive)) {
+            // Most .mid files leave the title slot empty and keep the filename;
+            // the ones that fill it in have been showing an 8.3 name for no reason.
+            QString midTitle = MidiPlayer::extractTitleQuick(fileInfo.absoluteFilePath());
+            if (!midTitle.isEmpty()) {
+                displayName += " - " + midTitle;
             }
         }
 

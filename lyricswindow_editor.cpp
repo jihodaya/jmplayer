@@ -154,6 +154,10 @@ void LyricsWindow::onEditLyrics()
             line.remove('\r');
         }
 
+        // Always save beside the song as <name>.txt - never into the .NOB. The
+        // lyric block's spacing carries the sync, so rewriting it from edited
+        // text is a good way to lose the timing; the external file is read in
+        // preference to the embedded lyrics anyway (loadLyricsForNob).
         const QString externalPath = externalLyricsFilePath();
         if (!externalPath.isEmpty()) {
             if (!writeExternalLyrics(newLyrics)) {

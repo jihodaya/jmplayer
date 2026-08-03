@@ -850,23 +850,27 @@ void LyricsWindow::closeEvent(QCloseEvent *event)
 void LyricsWindow::setNobFile(bool isNob)
 {
     m_isNobFile = isNob;
-    m_channelWidget->setVisible(isNob);
+
+    // The manual channel picker is gone from the UI (2026-07-31). Detection now
+    // scores every channel by note count AND by how late it starts, then trims
+    // the intro off a guide that plays from the top of the song, so choosing by
+    // hand no longer helps - and picking the wrong channel silently broke sync.
+    // The combo is still populated so the rest of the code keeps working.
+    m_channelWidget->setVisible(false);
     if (isNob) {
         m_channelCombo->clear();
         for (int channel = 1; channel <= 16; ++channel) {
             m_channelCombo->addItem(QString("Channel %1").arg(channel), channel);
         }
-        
+
         updateChannelSelection();
-        qDebug() << "[LyricsWindow] NOB file mode enabled, channel widget visible";
-    } else {
-        qDebug() << "[LyricsWindow] Normal file mode, channel widget hidden";
     }
 }
-void LyricsWindow::setChannelWidgetVisible(bool visible)
+void LyricsWindow::setChannelWidgetVisible(bool)
 {
+    // Deliberately ignored - see setNobFile().
     if (m_channelWidget) {
-        m_channelWidget->setVisible(visible);
+        m_channelWidget->setVisible(false);
     }
 }
 void LyricsWindow::setCurrentChannel(int channel)

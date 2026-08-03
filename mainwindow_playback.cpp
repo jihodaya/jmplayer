@@ -556,7 +556,17 @@ void MainWindow::updatePosition()
 
         // Update lyrics window based on tick position (for NOB / GYB files) or percentage (for standard MIDI)
         if (lyricsWindow && lyricsWindow->isVisible()) {
-            if ((!currentNobFilePath.isEmpty() || isOka || isGybFile(currentFile)) && !isIms) {
+            // A plain .mid gets in here too when it turned out to be a karaoke
+            // file: its lyric events carry their own ticks, so it can be driven
+            // exactly like NOB/OKA/GYB. Without this it fell through to the
+            // percentage-based path further down, which walks the lyrics from the
+            // first bar regardless of when the singing starts - the whole line
+            // lit up and the highlight ran through the introduction (2026-07-31).
+            const bool midiHasLyricTicks =
+                !currentNobFilePath.isEmpty() ? false : !currentLyricMarkerTicks.isEmpty();
+
+            if ((!currentNobFilePath.isEmpty() || isOka || isGybFile(currentFile)
+                 || midiHasLyricTicks) && !isIms) {
                 // Determine the active playback tick
                 bool isGyb = isGybFile(currentFile);
                 unsigned long currentTick = isGyb ? gybPlayer->getCurrentTick()
@@ -922,10 +932,19 @@ void MainWindow::updateTrackInfo()
             } else if (cleanFileName.length() > 4) {
                 cleanFileName = cleanFileName.left(cleanFileName.length() - 4); // strip .oka/.okm
             }
-        } else if (cleanFileName.endsWith(".mid", Qt::CaseInsensitive)) {
-            cleanFileName = cleanFileName.left(cleanFileName.length() - 4);
-        } else if (cleanFileName.endsWith(".midi", Qt::CaseInsensitive)) {
-            cleanFileName = cleanFileName.left(cleanFileName.length() - 5);
+        } else if (filePath.endsWith(".mid", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".midi", Qt::CaseInsensitive)) {
+            // Keyed off the path, not the display text: for a selected-but-not-
+            // playing track the text is the playlist row, which already carries
+            // " - <title>" appended by the scanner and so no longer ends in .mid.
+            QString midTitle = MidiPlayer::extractTitleQuick(filePath);
+            if (!midTitle.isEmpty()) {
+                cleanFileName = midTitle;
+            } else if (cleanFileName.endsWith(".midi", Qt::CaseInsensitive)) {
+                cleanFileName.chop(5);
+            } else if (cleanFileName.endsWith(".mid", Qt::CaseInsensitive)) {
+                cleanFileName.chop(4);
+            }
         }
 
         // Bank name in the title is only kept for SOP (per request: hide the

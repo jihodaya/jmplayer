@@ -11,6 +11,7 @@
 #include <QDateTime>
 #include <windows.h>
 #include <cmath>
+#include <algorithm>
 
 namespace {
 QString externalLyricsFilePath(const QString& filePath)
@@ -1495,6 +1496,15 @@ QList<unsigned long> NobFileHandler::extractLyricMarkerTicks(const QString& file
 
 
 
+    // Note-on ticks per MIDI channel.
+    //
+    // The guide melody that follows the sung line is NOT always on channel 11.
+    // Measured across 1281 files: a channel whose note count matches the
+    // syllable count exists in 82% of them, but it is channel 11 in only 15%
+    // - most often it is channel 2 or channel 1. Locking to channel 11 also
+    // picked up accompaniment that starts during the intro, which is why some
+    // songs began highlighting long before the singing (2026-07-31).
+    QList<unsigned long> notesByChannel[16];
     QList<unsigned long> channel10Notes;
 
 
@@ -1607,9 +1617,7 @@ QList<unsigned long> NobFileHandler::extractLyricMarkerTicks(const QString& file
 
 
 
-            // Channel 11 = index 10
-
-            if (eventType == 0x90 && channel == 10) {
+            if (eventType == 0x90) {
 
                 if (offset + 1 < trackEnd) {
 
@@ -1617,7 +1625,9 @@ QList<unsigned long> NobFileHandler::extractLyricMarkerTicks(const QString& file
 
                     if (velocity > 0) {
 
-                        channel10Notes.append(currentTime);
+                        notesByChannel[channel].append(currentTime);
+
+                        if (channel == 10) channel10Notes.append(currentTime);
 
                     }
 
@@ -1631,7 +1641,7 @@ QList<unsigned long> NobFileHandler::extractLyricMarkerTicks(const QString& file
 
             }
 
-            else if (eventType == 0x90 || eventType == 0x80) {
+            else if (eventType == 0x80) {
 
                 if (offset + 1 < trackEnd) {
 
@@ -1741,11 +1751,13 @@ QList<unsigned long> NobFileHandler::extractLyricMarkerTicks(const QString& file
 
 
 
-    // Check if we have enough markers
+    bool anyNotes = false;
+    for (int c = 0; c < 16; ++c) {
+        if (!notesByChannel[c].isEmpty()) { anyNotes = true; break; }
+    }
+    if (!anyNotes) {
 
-    if (channel10Notes.isEmpty()) {
-
-        qDebug() << "[NobFileHandler] No channel 10 markers found";
+        qDebug() << "[NobFileHandler] No note events found";
 
         return markerTicks;
 
@@ -1753,51 +1765,146 @@ QList<unsigned long> NobFileHandler::extractLyricMarkerTicks(const QString& file
 
 
 
-    // Check ratio: need at least 3 markers per lyric line
+    // Channel 11 is a MELODY guide, not a drum track - measured across 581 files
+    // in the library: its notes sit at 60-76, and only 6 files use the drum
+    // range. Each marker is one SUNG SYLLABLE, which is the same information
+    // OKM stores explicitly and why OKM sync is exact while this was not.
+    //
+    // Two corrections follow from that (2026-07-31):
+    //
+    //   1. A syllable is often sung as a chord, so several note-ons share one
+    //      tick. Counting each of them inflated the marker count. Collapse them.
+    //   2. Lines have different syllable counts, so markers must be handed out
+    //      IN PROPORTION to each line's length, not evenly. The even split was
+    //      off by ~47 markers on average (max 92) against the true cumulative
+    //      position, and not one file in 565 came out close.
 
-    double ratio = static_cast<double>(channel10Notes.size()) / lyrics.size();
+    // Keep the raw channel-11 list for the fallback path: collapsing chords
+    // helps the syllable mapping but slightly hurts the even split, which was
+    // tuned against un-collapsed counts (measured: 65 of 190 fallback files got
+    // marginally worse). Each path gets the list it was measured with.
+    QList<unsigned long> rawNotes = channel10Notes;
+    std::sort(rawNotes.begin(), rawNotes.end());
 
-    if (ratio < 3.0) {
-
-        qDebug() << "[NobFileHandler] Not enough markers (" << channel10Notes.size() << " / " << lyrics.size() << " = " << ratio << ")";
-
-        return markerTicks;
-
+    // Syllable count per line - only characters that are actually SUNG.
+    //
+    // '-' is a sustain placeholder (it stretches the previous syllable, it does
+    // not consume a marker) and '@' is a control mark; both are excluded
+    // everywhere else in the player, and counting them here made the cumulative
+    // index run ahead of the markers. In 0287.NOB the lyrics are padded with
+    // long runs of spaces and hyphens, which is exactly why it stayed out of
+    // sync (2026-07-31).
+    QList<int> syllablesPerLine;
+    int totalSyllables = 0;
+    for (const QString& line : lyrics) {
+        int n = 0;
+        for (const QChar& c : line) {
+            if (!c.isSpace() && c != QLatin1Char('-') && c != QLatin1Char('@')) n++;
+        }
+        syllablesPerLine.append(n);
+        totalSyllables += n;
     }
 
+    // Pick the vocal guide channel: among those whose note count is close to the
+    // syllable count, take the one that STARTS LATEST.
+    //
+    // Count alone is not enough. In 0287.NOB three channels are within
+    // tolerance, and the closest by count (ch12, 169 notes vs 163 syllables)
+    // begins at 10.1 s - it is accompaniment that plays through the intro, so
+    // the lyrics started scrolling long before the singing. The right channel
+    // (ch2/ch4, 175/173 notes) begins at 17.3 s, exactly where the vocal comes
+    // in. Accompaniment plays from the top of the song; the guide melody only
+    // starts when there is something to sing (2026-07-31).
+    QList<unsigned long> guideNotes;
+    int guideChannel = -1;
+    unsigned long latestStart = 0;
+    if (totalSyllables > 0) {
+        for (int c = 0; c < 16; ++c) {
+            if (notesByChannel[c].isEmpty()) continue;
+            QList<unsigned long> t = notesByChannel[c];
+            std::sort(t.begin(), t.end());
+            t.erase(std::unique(t.begin(), t.end()), t.end());
 
+            const double err = std::abs(t.size() - totalSyllables) / double(totalSyllables);
+            if (err > 0.15) continue;               // count too far off - not the guide
 
-    // Skip first marker (intro/preparation signal)
+            if (guideChannel < 0 || t.first() > latestStart) {
+                latestStart = t.first();
+                guideChannel = c;
+                guideNotes = t;
+            }
+        }
+    }
 
-    // Divide remaining markers into groups for each lyric line
+    // Nothing matched well enough - fall back to channel 11 as before.
+    if (guideChannel < 0) {
+        guideNotes = channel10Notes;
+        std::sort(guideNotes.begin(), guideNotes.end());
+        guideNotes.erase(std::unique(guideNotes.begin(), guideNotes.end()), guideNotes.end());
+        guideChannel = 10;
+    }
 
-    QList<unsigned long> remainingMarkers = channel10Notes.mid(1);
+    // Skip the first marker (intro/preparation signal), as before.
+    QList<unsigned long> remainingMarkers = guideNotes.mid(1);
 
-    int markersPerLine = remainingMarkers.size() / lyrics.size();
+    if (remainingMarkers.isEmpty() || lyrics.isEmpty()) {
+        qDebug() << "[NobFileHandler] No usable markers";
+        return markerTicks;
+    }
 
+    const double syllableRatio = totalSyllables > 0
+        ? static_cast<double>(remainingMarkers.size()) / totalSyllables
+        : 0.0;
 
+    qDebug() << "[NobFileHandler] guide channel" << (guideChannel + 1) << "-"
+             << guideNotes.size() << "markers (chords merged),"
+             << lyrics.size() << "lines," << totalSyllables << "syllables, ratio"
+             << syllableRatio;
 
-    qDebug() << "[NobFileHandler] Found" << channel10Notes.size() << "channel 10 markers for" << lyrics.size() << "lyrics";
+    if (totalSyllables > 0 && syllableRatio >= 0.85 && syllableRatio <= 2.5) {
 
-    qDebug() << "[NobFileHandler] Markers per line:" << markersPerLine << "(first marker skipped)";
+        // One marker per syllable: the running syllable total IS the marker
+        // index, with no scaling. Verified on the 187 files that sit at 1:1 -
+        // indexing straight by the cumulative count reproduces the true
+        // per-line ticks EXACTLY (median error 0 ticks, 187/187 improved);
+        // scaling by the ratio first left ~1090 ticks of error.
+        //
+        // Above ~1.2 the guide is melismatic (several notes per syllable) and
+        // the raw count runs off the end, so there the ratio IS the right
+        // correction - measured separately on those 136 files.
+        const bool oneToOne = (syllableRatio <= 1.2);
 
-
-
-    // Extract first marker of each group
-
-    for (int i = 0; i < lyrics.size(); i++) {
-
-        int markerIndex = i * markersPerLine;
-
-        if (markerIndex < remainingMarkers.size()) {
-
-            markerTicks.append(remainingMarkers[markerIndex]);
-
+        int acc = 0;
+        for (int i = 0; i < lyrics.size(); i++) {
+            int idx = oneToOne ? acc : static_cast<int>(acc * syllableRatio);
+            if (idx >= remainingMarkers.size()) idx = remainingMarkers.size() - 1;
+            markerTicks.append(remainingMarkers[idx]);
+            acc += syllablesPerLine[i];
         }
 
+        qDebug() << "[NobFileHandler] Mapped by cumulative syllables";
+        return markerTicks;
     }
 
+    // Fall back to the old even split, on the RAW markers. Reached when the
+    // guide melody covers only part of the lyrics (ratio well under 1 - about a
+    // third of the library) or is unusually dense; the file simply lacks
+    // per-syllable timing, so nothing better is available.
+    QList<unsigned long> fallbackMarkers = rawNotes.mid(1);
+    if (fallbackMarkers.isEmpty()) return markerTicks;
 
+    int markersPerLine = fallbackMarkers.size() / lyrics.size();
+    if (markersPerLine < 1) markersPerLine = 1;
+
+    qDebug() << "[NobFileHandler] Ratio out of range - even split,"
+             << markersPerLine << "markers per line";
+
+    for (int i = 0; i < lyrics.size(); i++) {
+        int markerIndex = i * markersPerLine;
+        if (markerIndex < fallbackMarkers.size()) {
+            markerTicks.append(fallbackMarkers[markerIndex]);
+        }
+    }
 
     return markerTicks;
 
@@ -1874,6 +1981,76 @@ QString NobFileHandler::decodeJohab(const QByteArray& data)
 }
 
 
+
+double NobFileHandler::lyricTicksPerColumn()
+{
+    return 20.44;
+}
+
+QList<unsigned long> NobFileHandler::extractLyricColumnTicks(const QString& filePath,
+                                                             const QList<unsigned long>& guideTicks)
+{
+    // The lyric block is a piano roll: a byte position in it IS a point in time.
+    // Characters sit at the column where they are sung, the spaces and short NULL
+    // runs between them are the waiting time, and the long NULL run at the front
+    // is the intro. Measured across the library (2026-07-31):
+    //
+    //   * forcing the line through the origin still fits with R2 = 0.9990
+    //     (88% of files above 0.98) - so column 0 IS song tick 0, which is what
+    //     finally pins the absolute timing down;
+    //   * only the scale is per-file, and the median of tick/column ratios
+    //     recovers it to 0.27% (91% of files within 2%).
+    //
+    // This is the same information OKM stores as an explicit table, and why OKM
+    // sync was always exact while the note-counting guesswork here was not.
+    QList<unsigned long> ticks;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) return ticks;
+    const QByteArray data = file.readAll();
+    file.close();
+
+    QByteArray eot;
+    eot.append((char)0xFF); eot.append((char)0x2F); eot.append((char)0x00);
+    const int end = data.lastIndexOf(eot);
+    if (end == -1) return ticks;
+
+    // Columns are counted from the very start of the block, NULL padding
+    // included - that padding is the intro and must keep its time.
+    const int base = end + 3;
+    QList<int> columns;
+    for (int i = base; i < data.size(); ) {
+        const unsigned char b = static_cast<unsigned char>(data[i]);
+        if (b >= 0x80 && i + 1 < data.size()) {
+            columns.append(i - base); i += 2;          // one Korean glyph, two cells
+        } else if (b != 0x20 && b != 0x00 && b != 0x2d) {
+            columns.append(i - base); i += 1;
+        } else {
+            i += 1;                                    // space, padding, sustain
+        }
+    }
+    if (columns.size() < 40) return ticks;
+
+    // One column is a fixed number of ticks - it does NOT scale with the file's
+    // MIDI division. Fitted against 574 files whose guide channel matches the
+    // syllable count 1:1: the median is 20.44 ticks per column, and it comes out
+    // the same for TPQN 120 (20.50) and TPQN 192 (20.44). The lyric roll was
+    // authored at one fixed resolution, which is why the DOS player could scroll
+    // it without knowing the tempo map (2026-07-31).
+    //
+    // Header byte 0x28 briefly looked like a resolution field - it correlates at
+    // r=0.66 - but that was an artefact of the sample: files sharing a 0x28
+    // value need different scales, and files with different values need the same
+    // one. Using it put 0125 and 0127 out by 10 seconds.
+    const double scale = lyricTicksPerColumn();
+    Q_UNUSED(guideTicks);
+
+    for (int c : columns) ticks.append(static_cast<unsigned long>(c * scale + 0.5));
+
+    qDebug() << "[NobFileHandler] column timing:" << ticks.size()
+             << "syllables, scale" << scale << "ticks/column";
+    return ticks;
+}
 
 int NobFileHandler::detectMarkerChannel(const QString& filePath)
 
@@ -2251,7 +2428,18 @@ int NobFileHandler::detectMarkerChannel(const QString& filePath)
 
 
 
-            if (firstTick >= 3000) {
+            // The scale used to stop at 3000, which made every late-starting
+            // channel look equally good. In 0287.NOB that let accompaniment
+            // beginning at tick 4128 (10.1 s) beat the real vocal guide at 7104
+            // (17.3 s) on a 0.04 difference in note count - the lyrics then ran
+            // from the intro onwards. Accompaniment plays from the top of the
+            // song and the guide waits for the singing, so a later start is
+            // strong evidence and the bonus has to keep rising (2026-07-31).
+            if (firstTick >= 6000) {
+                delayBonus = 1.1;
+            } else if (firstTick >= 4500) {
+                delayBonus = 0.95;
+            } else if (firstTick >= 3000) {
                 delayBonus = 0.8;
             } else if (firstTick >= 2000) {
                 delayBonus = 0.65;

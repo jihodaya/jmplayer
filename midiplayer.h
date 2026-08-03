@@ -131,6 +131,21 @@ public:
     QString getTrackInfo() const;
     QStringList extractLyrics() const;
 
+    // Tick of each sung syllable, taken straight from the lyric events. Pairs
+    // one-for-one with the syllables in extractLyrics().
+    QList<unsigned long> extractLyricSyllableTicks() const;
+
+    // Decode a MIDI text/lyric meta event. SMF stores no encoding, so the bytes
+    // are identified by inspection - see the implementation for the measured
+    // mix in real files and why the order is what it is.
+    static QString decodeMetaText(const QByteArray& raw);
+
+    // Song title straight out of the file, without loading it for playback -
+    // the .mid counterpart of ImsPlayer/GybFileHandler::extractTitleQuick, used
+    // by the playlist scanner and the title bar. Empty when the file carries no
+    // title, which is most of them.
+    static QString extractTitleQuick(const QString& fileName);
+
     unsigned long getCurrentTick() const; // Current playback position in MIDI ticks
 
     // 마커 채널 타이밍 추출

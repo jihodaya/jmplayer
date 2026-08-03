@@ -580,9 +580,259 @@ QString MidiPlayer::getTrackInfo() const
     return QString("Tracks: %1 | Events: %2").arg(tracks.size()).arg(totalEvents);
 }
 
+QList<unsigned long> MidiPlayer::extractLyricSyllableTicks() const
+{
+    // A karaoke MIDI timestamps every lyric event, so the syllable timing is in
+    // the file - no counting notes, no guessing which channel is the vocal, no
+    // trimming an intro. Same quality of information OKM carries, and the reason
+    // this path can be exact where NOB needs heuristics.
+    //
+    // One tick per SUNG syllable, matching how the highlight is advanced
+    // (mainwindow_playback.cpp indexes syllables, not events), so the sustain
+    // marks and line breaks that extractLyrics() drops are skipped here too.
+    QList<unsigned long> ticks;
+
+    for (const auto& track : tracks) {
+        for (const auto& event : track.events) {
+            if (!event.isMetaEvent || event.metaData.empty()) continue;
+            if (event.data1 != 0x05 && event.data1 != 0x01) continue;
+
+            QByteArray payload(reinterpret_cast<const char*>(event.metaData.data()),
+                               event.metaData.size());
+            const QString text = decodeMetaText(payload);
+
+            // One tick per DISPLAYED character, because that is what the
+            // highlight steps through. Most events carry a single syllable, but
+            // English words arrive whole ("everybody^"), so counting one tick per
+            // event would drift. Bracketed markers like <간주> / <inst> are
+            // interlude cues, not lyrics - extractLyrics() shows them, yet they
+            // are never sung, so they get a tick each and no more.
+            int shown = 0;
+            for (const QChar& c : text) {
+                if (c == QLatin1Char('\r') || c == QLatin1Char('\n')) continue;
+                if (c == QLatin1Char('^') || c == QLatin1Char('-') ||
+                    c == QLatin1Char('@') || c.isSpace()) continue;
+                shown++;
+            }
+            for (int i = 0; i < shown; ++i)
+                ticks.append(static_cast<unsigned long>(event.absoluteTimeUs));
+        }
+    }
+
+    std::sort(ticks.begin(), ticks.end());
+    qDebug() << "[MidiPlayer] Extracted" << ticks.size() << "lyric syllable ticks";
+    return ticks;
+}
+
+// Names that occupy the title slot without saying anything. Measured over the
+// local library: 57 files are left at the sequencer's "untitled" default and 31
+// carry the "WinJammer Demo" watermark, and in every one of those cases the
+// filename is the more informative of the two - several are Korean song titles.
+static bool isPlaceholderTitle(const QString& title)
+{
+    static const QStringList kPlaceholders = {
+        "untitled", "unnamed", "winjammer demo"
+    };
+    if (kPlaceholders.contains(title.toLower())) return true;
+
+    // Nothing but punctuation ("??" and friends) is no better.
+    for (const QChar& c : title) {
+        if (c.isLetterOrNumber()) return false;
+    }
+    return true;
+}
+
+// Song title, read straight from the file without loading it for playback.
+//
+// SMF has no dedicated title field the way NOB/GYB/IMS headers do; the
+// convention is that track 0 (the tempo track of a format-1 file) carries the
+// song name in a Sequence/Track Name meta event, while the remaining tracks name
+// their instruments. Only track 0 is trusted here - measured over the local
+// library, reading every track instead would return "melody", "bass", "Kick"
+// for the karaoke files, which is worse than showing the filename.
+//
+// KAR files instead put "@T<title>" in a text event, keyed by a "@K" magic in
+// the same track; that is honoured when the magic is present so the text cannot
+// be mistaken for an ordinary comment.
+QString MidiPlayer::extractTitleQuick(const QString& fileName)
+{
+    QFile f(fileName);
+    if (!f.open(QIODevice::ReadOnly)) return QString();
+    const QByteArray data = f.read(1 << 20);   // a title lives near the top
+    f.close();
+
+    const int n = data.size();
+    if (n < 14 || data.left(4) != "MThd") return QString();
+
+    auto be32 = [&data](int at) -> quint32 {
+        return (quint32(quint8(data[at]))     << 24) |
+               (quint32(quint8(data[at + 1])) << 16) |
+               (quint32(quint8(data[at + 2])) <<  8) |
+                quint32(quint8(data[at + 3]));
+    };
+
+    int pos = 8 + int(be32(4));
+    int track = 0;
+    QByteArray trackName;      // track 0 only
+    QByteArray karTitle;
+    bool karMagic = false;
+
+    while (pos + 8 <= n && data.mid(pos, 4) == "MTrk") {
+        const int len = int(be32(pos + 4));
+        int p = pos + 8;
+        const int end = qMin(p + len, n);      // truncated files are common
+        quint8 running = 0;
+
+        while (p < end) {
+            while (p < end && (quint8(data[p]) & 0x80)) p++;   // delta time
+            if (p >= end) break;
+            p++;
+
+            if (p >= end) break;
+            quint8 status = quint8(data[p]);
+            if (status & 0x80) p++; else status = running;
+            if (status & 0x80 && status < 0xF0) running = status;
+
+            if (status == 0xFF) {
+                if (p >= end) break;
+                const quint8 type = quint8(data[p++]);
+                int len2 = 0;
+                while (p < end) {
+                    const quint8 b = quint8(data[p++]);
+                    len2 = (len2 << 7) | (b & 0x7F);
+                    if (!(b & 0x80)) break;
+                }
+                if (len2 < 0 || p + len2 > end) break;
+                const QByteArray payload = data.mid(p, len2);
+                p += len2;
+
+                if (type == 0x03 && track == 0 && trackName.isEmpty())
+                    trackName = payload;
+                else if (type == 0x01) {
+                    if (payload.startsWith("@K")) karMagic = true;
+                    else if (payload.startsWith("@T") && karTitle.isEmpty())
+                        karTitle = payload.mid(2);
+                }
+            } else if (status == 0xF0 || status == 0xF7) {
+                int len2 = 0;
+                while (p < end) {
+                    const quint8 b = quint8(data[p++]);
+                    len2 = (len2 << 7) | (b & 0x7F);
+                    if (!(b & 0x80)) break;
+                }
+                if (len2 < 0 || p + len2 > end) break;
+                p += len2;
+            } else if (status >= 0x80) {
+                p += (status >= 0xC0 && status <= 0xDF) ? 1 : 2;
+            } else {
+                break;   // no running status yet - give up on this track
+            }
+        }
+
+        pos = qMin(pos + 8 + len, n);
+        track++;
+    }
+
+    const QByteArray raw = (karMagic && !karTitle.isEmpty()) ? karTitle : trackName;
+    QString title = decodeMetaText(raw).trimmed();
+
+    // Same guard the IMS path uses: a "title" that just repeats the filename
+    // tells the user nothing.
+    if (title.isEmpty() || isPlaceholderTitle(title) ||
+        title == QFileInfo(fileName).baseName()) {
+        return QString();
+    }
+    return title;
+}
+
+QString MidiPlayer::decodeMetaText(const QByteArray& raw)
+{
+    // Standard MIDI carries no encoding information in its text events, so the
+    // bytes have to be identified by inspection. Measured over 32,964 text
+    // events in the local library (2026-07-31):
+    //
+    //   ASCII    13,056   plain English titles
+    //   CP949    19,423   Korean lyrics - the bulk of it
+    //   UTF-8       363
+    //   Shift-JIS       2   Japanese titles (Final Fantasy rips)
+    //   Latin-1       120   the (c) sign in copyright lines
+    //
+    // NOT ONE file decoded as UTF-8 alone, which is what the old code assumed -
+    // so every Korean lyric came out as replacement characters.
+    //
+    // Order matters. UTF-8 first because its multi-byte form is strict enough
+    // that a false positive is unlikely; then CP949 and Shift-JIS, each accepted
+    // only if it yields characters from that language rather than merely
+    // decoding; Latin-1 last as the catch-all, since it accepts any byte and so
+    // can never fail - which is what stops '(c)' turning into a broken glyph.
+    if (raw.isEmpty()) return QString();
+
+    bool ascii = true;
+    for (char c : raw) {
+        if (static_cast<unsigned char>(c) >= 0x80) { ascii = false; break; }
+    }
+    if (ascii) return QString::fromLatin1(raw);
+
+    {
+        auto toUtf8 = QStringDecoder(QStringDecoder::Utf8);
+        const QString s = toUtf8(raw);
+        if (!toUtf8.hasError()) return s;
+    }
+
+    // Legacy codepages go through the Windows API, not QStringDecoder: Qt6 only
+    // builds in the UTF family plus Latin-1, and this Qt has no ICU, so
+    // QStringDecoder("CP949") is simply invalid and every Korean lyric fell
+    // through to Latin-1 - which is why they showed up as "¾Æ" instead of "아".
+    // The rest of the player already decodes Korean this way (NobFileHandler).
+    // MB_ERR_INVALID_CHARS matters more than it looks. Without it the API never
+    // fails - it quietly substitutes whatever it cannot map - so CP949 "succeeded"
+    // on Shift-JIS bytes and, because a few of those pairs happen to land on real
+    // Hangul, passed the check below. That is how 999_GS2.MID's Japanese title
+    // came out as '뗢됋밪벞괱괱괱걁뒶맟붎걂' instead of '銀河鉄道９９９（完成版）'.
+    auto tryCodepage = [&raw](UINT cp, DWORD flags) -> QString {
+        const int len = MultiByteToWideChar(cp, flags, raw.constData(), raw.size(), nullptr, 0);
+        if (len <= 0) return QString();
+        std::wstring buf(len, L'\0');
+        if (MultiByteToWideChar(cp, flags, raw.constData(), raw.size(), buf.data(), len) <= 0)
+            return QString();
+        return QString::fromWCharArray(buf.data(), len);
+    };
+    auto hasHangul = [](const QString& s) {
+        for (const QChar& c : s) {
+            if (c.unicode() >= 0xAC00 && c.unicode() <= 0xD7A3) return true;
+        }
+        return false;
+    };
+
+    // Korean, then Japanese, each required to decode cleanly AND to yield
+    // characters of that language.
+    {
+        const QString s = tryCodepage(949, MB_ERR_INVALID_CHARS);
+        if (hasHangul(s)) return s;
+    }
+    {
+        const QString s = tryCodepage(932, MB_ERR_INVALID_CHARS);
+        for (const QChar& c : s) {
+            const ushort u = c.unicode();
+            if ((u >= 0x3040 && u <= 0x30FF) || (u >= 0x4E00 && u <= 0x9FFF)) return s;
+        }
+    }
+
+    // Korean again, this time tolerating a bad byte: CP949 is the bulk of this
+    // library, so a lyric with one damaged pair should still read as Korean
+    // rather than fall through to Latin-1.
+    {
+        const QString s = tryCodepage(949, 0);
+        if (hasHangul(s)) return s;
+    }
+
+    return QString::fromLatin1(raw);
+}
+
 QStringList MidiPlayer::extractLyrics() const
 {
     QStringList lyrics;
+    QByteArray currentBytes;
 
     if (tracks.empty()) {
         return lyrics;
@@ -591,24 +841,49 @@ QStringList MidiPlayer::extractLyrics() const
     // Look for lyric events (Meta Event 0x05) in all tracks
     for (const auto& track : tracks) {
         for (const auto& event : track.events) {
+            // The meta TYPE lives in event.data1 - parseMidiFile() reads it into
+            // that field and puts only the payload in metaData (see the 0xFF
+            // branch there). Reading metaData[0] as the type meant this matched
+            // whatever the first text byte happened to be and then chopped that
+            // byte off, so real lyric events were skipped and the few that got
+            // through lost their first character (2026-07-31).
             if (event.isMetaEvent && !event.metaData.empty()) {
-                unsigned char metaType = event.metaData[0];
+                const unsigned char metaType = event.data1;
 
-                // 0x05 = Lyric event, 0x01 = Text event (sometimes used for lyrics)
+                // 0x05 = Lyric, 0x01 = Text (some files carry lyrics there)
                 if (metaType == 0x05 || metaType == 0x01) {
-                    // Extract text from meta data (skip meta type byte)
-                    if (event.metaData.size() > 1) {
-                        QByteArray textData(reinterpret_cast<const char*>(event.metaData.data() + 1),
-                                          event.metaData.size() - 1);
-                        QString text = QString::fromUtf8(textData).trimmed();
-
-                        if (!text.isEmpty()) {
-                            lyrics.append(text);
+                    // A karaoke MIDI sends ONE SYLLABLE per lyric event and ends
+                    // a line with a bare CR (or LF).
+                    //
+                    // Gather the RAW BYTES of a line and decode once at the end.
+                    // Deciding the encoding per event cannot work: a lone
+                    // syllable is two bytes, and two bytes are not enough
+                    // evidence - '쩔' (c2 bf) failed the Hangul test and fell
+                    // through to Latin-1 as '¿', which is where the stray
+                    // characters mid-line came from (2026-07-31).
+                    const char* p = reinterpret_cast<const char*>(event.metaData.data());
+                    for (size_t i = 0; i < event.metaData.size(); ++i) {
+                        if (p[i] == '\r' || p[i] == '\n') {
+                            const QString line = decodeMetaText(currentBytes).trimmed();
+                            if (!line.isEmpty()) lyrics.append(line);
+                            currentBytes.clear();
+                        } else if (p[i] == '^') {
+                            // Sustain mark from the karaoke authoring tool, like
+                            // the '-' in NOB/GYB lyrics. Not sung, not shown.
+                            continue;
+                        } else {
+                            currentBytes.append(p[i]);
                         }
                     }
                 }
             }
         }
+    }
+
+    // The last line usually has no trailing CR.
+    {
+        const QString line = decodeMetaText(currentBytes).trimmed();
+        if (!line.isEmpty()) lyrics.append(line);
     }
 
     qDebug() << "[MidiPlayer] Extracted" << lyrics.size() << "lyric lines from MIDI file";
