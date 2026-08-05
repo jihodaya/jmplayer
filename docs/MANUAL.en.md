@@ -1,4 +1,4 @@
-# JMPlayer R2.4e — User Manual
+# JMPlayer R2.5h — User Manual
 
 *[한국어 매뉴얼은 여기 → MANUAL.ko.md](MANUAL.ko.md)*
 
@@ -24,7 +24,7 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 ## 2. Main Window
 
 ### Top bar
-* **Output device combo** — choose `[JJoMe Synth (SoundFont)]` (built-in synthesizer) or any system MIDI output device. Applies to MIDI/NOB/OKM playback; OPL formats always use the built-in OPL3 emulator.
+* **Output device combo** — choose `[JJoMe Synth (SoundFont)]` (built-in synthesizer), any system MIDI output device, or **Nuked SC-55** (section 11). Applies to MIDI/NOB/OKM playback; OPL formats always use the built-in OPL3 emulator.
 * **R** — refresh the list of MIDI devices.
 * **⚙️** — open the **SoundFont Manager** (switch the active `.sf2`).
 * **Search box** — live filter for the playlist; clearing the text restores the full list.
@@ -58,6 +58,7 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | **DSP** | Analog simulation for OPL output (LPF + soft saturation), 3 levels: DSP → DSP2 → DSP3 → off |
 | 🎹 | Toggle the **Piano Roll** window |
 | **BNK** | Select an external OPL instrument bank (`.BNK` / `.IBK`) for AdLib formats |
+| **OUT** | **OPL tunnel** — stream OPL registers to the selected MIDI device (section 12, `Ctrl+Shift+O`) |
 | 📜 | Toggle the **Lyrics Window** |
 | ⏺ | Record the audio output to a WAV file (also **Ctrl+R**) |
 
@@ -76,7 +77,10 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | **F9 / F10** | Key transpose −1 / +1 semitone (range −6…+6, all formats) |
 | **F11** | Reset tempo and key to the original |
 | **F12** | OPL pseudo-stereo / performance mode dialog (modes 1–9) |
+| **F6** | **Sound-module reset** — whether to reset the device on each new song (section 13) |
 | **Ctrl+R** | Start / stop WAV recording |
+| **Ctrl+Shift+O** | Toggle the OPL tunnel (same as the **OUT** button) |
+| **Esc** | Clear the search box and return to the list |
 
 ## 4. Karaoke Lyrics
 
@@ -87,11 +91,11 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
   * `~` hold the previous syllable one more beat
   * `#` insert a one-beat rest before the next syllable
   * `@` repeat from the beginning after this line
-  * **Export** saves the lyrics to a text file.
+* **Editing never touches the original file.** The result is saved as a `.txt` of the same name beside the song, and is used in preference from then on. The `.NOB` and friends are left intact, so deleting the `.txt` restores the original lyrics.
 
 ## 5. Channel Monitor (📊)
 
-* **MIDI mode** — 16 channels in an OPL-style dark theme: per-channel gradient VU bar with peak hold, instrument-name card, program number and the currently played notes (colored by velocity). The sound module type (**GM / MT-32 / GS / XG**) is auto-detected and shown with a confidence score.
+* **MIDI mode** — 16 channels in an OPL-style dark theme: per-channel gradient VU bar with peak hold, instrument-name card, program number and the currently played notes (colored by velocity). The sound module type (**GM / MT-32 / GS / XG**) is identified from the reset messages, vendor SysEx and text the file actually contains, and shown with the evidence used. A file that declares nothing reads **`GM (assumed)`** in grey - it is being read as GM, but that is distinct from a file which really does declare GM.
 * **OPL mode** (IMS/ROL/SOP/GYB/OKA/VGM) — 20 FM voices with instrument cards, note/velocity readouts and the same VU meters; voice instrument names follow the actual OPL patches in real time.
 
 ## 6. Piano Roll (🎹)
@@ -142,7 +146,45 @@ E:\JMPlayer\
 * The location in use is shown at the bottom of the **`F1`** help.
 * Note: everything the player writes stays inside its own folder, but Windows keeps its own records (recent-documents lists and so on) that no application can suppress.
 
-## 11. Tips
+## 11. Nuked SC-55 (optional)
+
+Songs can be played through Nuked SC-55, a cycle-accurate emulator of the Roland
+SC-55, by selecting **Nuked SC-55** in the output device combo.
+
+**It is not bundled** - licensing does not allow it to be redistributed, so you
+supply it yourself:
+
+1. Build the patched emulator following the notes in `emulator-patch\`.
+2. Put the resulting executable in the `NukedSC55\` folder.
+3. Put the SC-55 ROM files in the same folder. **The ROMs belong to Roland and are
+   not provided.**
+
+Once that is in place the emulator starts alongside the first song, and playback
+waits for it to finish booting. No virtual MIDI port such as loopMIDI is needed.
+
+## 12. OPL Tunnel (**OUT**)
+
+While an OPL format plays, this streams the register writes out to the **selected
+MIDI output device**, so real or emulated OPL hardware - a Raspberry Pi jukebox,
+for instance - plays the same performance.
+
+It is of no use without a device on the other end. Toggle it with the **OUT**
+button or `Ctrl+Shift+O`; the setting is remembered between runs.
+
+## 13. Sound-Module Reset (**F6**)
+
+Chooses whether a reset is sent to the output device before each new song, so the
+previous song leaves no patches, volumes or effects behind.
+
+* Pick which resets to send - **GM System On**, **GS Reset** (Roland), **XG System
+  On** (Yamaha), **MT-32 Reset**.
+* A **delay in milliseconds** can follow the reset. Real hardware takes a moment to
+  act on one, and starting the music too soon swallows the first notes.
+* **Off by default.** The built-in SoundFont does not need it; turn it on when
+  driving an external MIDI module.
+
+
+## 14. Tips
 
 * All settings (volume, device, repeat mode, DSP level, last folder/position) are saved automatically.
 * ZIP archives can be opened directly — contained songs are listed and playable.
