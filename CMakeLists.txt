@@ -248,6 +248,7 @@ target_link_libraries(${PROJECT_NAME}
     adplug
     winmm
     dwmapi
+    dbghelp   # crash log: symbol lookup for the unhandled-exception filter
 )
 
 # English UI build: pass -DENGLISH_UI=ON to build all player UI text in English.

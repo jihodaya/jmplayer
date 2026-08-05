@@ -1962,7 +1962,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.5f";
+    QString title = "🎵 JJoMe MIDI Player v2.5h";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -2255,6 +2255,16 @@ void MainWindow::showHelpDialog()
         "<b>[Supported music file extensions]</b><br/>"
         "&#8226; <b>*.mid, *.midi, *.nob, *.ims, *.rol, *.sop, *.gyb, *.oka, *.okm, *.vgm, *.vgz</b><br/>"
     );
+    // Which of the two storage locations is live is otherwise invisible, and not
+    // knowing is itself a source of confusion once portable mode exists.
+    helpText += QString(
+        "<br/><b>[Settings location]</b><br/>"
+        "&#8226; <b>%1</b>%2<br/>"
+        "&#8226; Create a folder named <b>cfg</b> next to the program to keep "
+        "settings there instead of My Documents (portable). Put your songs in "
+        "the <b>Music</b> folder so they follow the drive.<br/>")
+        .arg(QDir::toNativeSeparators(SettingsManager::storageDir()))
+        .arg(SettingsManager::isPortable() ? " (portable)" : "");
 #else
     helpBox.setWindowTitle(QString::fromUtf8("단축키 및 기능 도움말"));
 
@@ -2284,8 +2294,16 @@ void MainWindow::showHelpDialog()
         "<b>[지원 음악 파일 확장자]</b><br/>"
         "• <b>*.mid, *.midi, *.nob, *.ims, *.rol, *.sop, *.gyb, *.oka, *.okm, *.vgm, *.vgz</b><br/>"
     );
+    helpText += QString::fromUtf8(
+        "<br/><b>[설정 파일 위치]</b><br/>"
+        "• <b>%1</b>%2<br/>"
+        "• 프로그램 옆에 <b>cfg</b> 폴더를 만들면 내 문서 대신 그곳에 설정을 "
+        "저장합니다(휴대용). 음악은 <b>Music</b> 폴더에 넣으면 USB 드라이브 "
+        "문자가 바뀌어도 목록이 유지됩니다.<br/>")
+        .arg(QDir::toNativeSeparators(SettingsManager::storageDir()))
+        .arg(SettingsManager::isPortable() ? QString::fromUtf8(" (휴대용)") : QString());
 #endif
-    
+
     helpBox.setText(helpText);
     helpBox.exec();
     isHelpOpen = false;

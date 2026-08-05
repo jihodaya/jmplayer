@@ -4,7 +4,60 @@
 #include <iostream>
 #include <QLocalSocket>
 #include <QDir>
+#include <QFile>
+#include <QDateTime>
 #include "mainwindow.h"
+#include "settingsmanager.h"
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <dbghelp.h>
+
+// Write where a crash happened to <settings folder>/jmp_crash.log.
+//
+// A crash in a release build otherwise says nothing at all - the window simply
+// disappears - which turns every report into guesswork. This records the fault
+// code and the call stack, so a user can send one small text file instead.
+static LONG WINAPI writeCrashLog(EXCEPTION_POINTERS* info)
+{
+    static bool alreadyWriting = false;      // a fault inside here must not loop
+    if (alreadyWriting) return EXCEPTION_EXECUTE_HANDLER;
+    alreadyWriting = true;
+
+    QFile log(SettingsManager::storageDir() + "/jmp_crash.log");
+    if (log.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream out(&log);
+        out << "\n==== " << QDateTime::currentDateTime().toString(Qt::ISODate)
+            << "  code 0x"
+            << QString::number(info->ExceptionRecord->ExceptionCode, 16)
+            << "  at 0x"
+            << QString::number((quintptr)info->ExceptionRecord->ExceptionAddress, 16)
+            << " ====\n";
+
+        HANDLE proc = GetCurrentProcess();
+        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+        SymInitialize(proc, nullptr, TRUE);
+
+        void* frames[48];
+        const USHORT n = CaptureStackBackTrace(0, 48, frames, nullptr);
+        char buffer[sizeof(SYMBOL_INFO) + 256];
+        SYMBOL_INFO* sym = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+
+        for (USHORT i = 0; i < n; ++i) {
+            DWORD64 disp = 0;
+            if (SymFromAddr(proc, (DWORD64)frames[i], &disp, sym))
+                out << "  " << i << ": " << sym->Name << " +" << (qulonglong)disp << "\n";
+            else
+                out << "  " << i << ": 0x" << QString::number((quintptr)frames[i], 16) << "\n";
+        }
+        out.flush();
+        log.close();
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
 
 // Remove leftover extracted-MIDI temp files from a previous run.
 //
@@ -34,6 +87,10 @@ int main(int argc, char *argv[])
     QApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
     QApplication app(argc, argv);
+
+#ifdef Q_OS_WIN
+    SetUnhandledExceptionFilter(writeCrashLog);
+#endif
 
     // Do NOT set application/organization names to prevent registry usage
     // app.setApplicationName("MIDI File Player");

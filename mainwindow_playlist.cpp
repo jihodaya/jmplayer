@@ -142,7 +142,9 @@ void MainWindow::removeFile()
     // Update UI to reflect tree changes
     updateUIFromCurrentNode();
 
-    // Save changes
+    // Save changes - the user may have just removed the last entry, and that
+    // has to stick.
+    m_allowEmptyPlaylistSave = true;
     triggerSavePlaylistTree();
 }
 
@@ -236,12 +238,28 @@ void MainWindow::onCleanupPlaylist()
             wchar_t drivePath[4] = { (wchar_t)path[0].unicode(), L':', L'\\', L'\0' };
             UINT driveType = GetDriveTypeW(drivePath);
             if (driveType == DRIVE_REMOVABLE) {
-                // ?뚮줈?????대룞???쒕씪?대툕: 誘몃뵒???쎌엯 ?щ? 鍮좊Ⅴ寃??뺤씤
-                HANDLE hDrive = CreateFileW(drivePath, GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                    OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, nullptr);
-                if (hDrive == INVALID_HANDLE_VALUE) return false; // 誘몄궫??
-                CloseHandle(hDrive);
+                // Is the medium actually present?
+                //
+                // This used to call CreateFileW on the drive ROOT, which is a
+                // directory - opening one needs FILE_FLAG_BACKUP_SEMANTICS, and
+                // that flag was never passed, so the call failed every single
+                // time. Measured here: error 3 on a drive that had media, error
+                // 21 on an empty slot; it never once succeeded. Every node on a
+                // removable drive was therefore judged missing and deleted, so
+                // Refresh wiped a playlist living on a USB stick - while the
+                // identical copy on a hard disk was untouched, because
+                // DRIVE_FIXED never enters this branch at all. That is the
+                // entire difference between the two.
+                //
+                // GetVolumeInformationW answers the same question without
+                // opening a handle: it succeeds when media is present and fails
+                // with ERROR_NOT_READY when the slot is empty.
+                const UINT prevErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS);
+                DWORD serial = 0, maxComponent = 0, fsFlags = 0;
+                const BOOL mediaPresent = GetVolumeInformationW(
+                    drivePath, nullptr, 0, &serial, &maxComponent, &fsFlags, nullptr, 0);
+                SetErrorMode(prevErrorMode);
+                if (!mediaPresent) return false;
             }
         }
         return true;
@@ -845,6 +863,10 @@ void MainWindow::updateUIFromCurrentNode()
 
 void MainWindow::initializePlaylistTree()
 {
+    // Kill any pending debounced save before emptying the tree, or it fires
+    // during the gap and writes the empty list it happens to find.
+    if (playlistSaveTimer) playlistSaveTimer->stop();
+
     // Delete existing tree if any
     if (playlistRoot) {
         delete playlistRoot;
@@ -919,6 +941,71 @@ void MainWindow::addFolderToCurrentNode(const QString &folderPath)
         s->deleteLater();
     });
     
+    scanner->start();
+}
+
+// Rebuild the portable "Music" entry at the root from what is on disk right now.
+// No-op unless a cfg folder made this copy portable.
+void MainWindow::refreshPortableMusicFolder()
+{
+    const QString musicPath = SettingsManager::portableMusicDir();
+    if (musicPath.isEmpty() || !playlistRoot) return;
+
+    // loadPlaylistTree() runs twice during startup - once from the constructor
+    // and again from loadSettings() - and the scan is asynchronous, so without
+    // this guard the second pass started a second scanner before the first had
+    // appended anything to remove, and the list ended up with two Music
+    // folders.
+    if (m_portableMusicScanRunning) return;
+    m_portableMusicScanRunning = true;
+
+    FolderScanner* scanner = new FolderScanner(musicPath, this);
+    connect(scanner, &FolderScanner::scanFinished, this, [this, musicPath](FolderScanner* s) {
+        m_portableMusicScanRunning = false;
+        PlaylistTreeNode* resultNode = s->getResultNode();
+        if (resultNode && playlistRoot) {
+            // Drop the previous snapshot here rather than before the scan: the
+            // tree may have been rebuilt from playlist.json in the meantime, so
+            // this is the only moment both the old entry and the new one exist.
+            //
+            // currentNode has to be moved off anything about to be freed. The
+            // saved position is restored before this scan finishes, so it can
+            // legitimately point at the old Music node - or at a song inside it
+            // - and deleting underneath it left a dangling pointer that did not
+            // fault here but later, the first time the list was walked. That is
+            // what crashed the refresh button, and only in portable mode,
+            // because this is the only place nodes are freed asynchronously.
+            std::function<bool(PlaylistTreeNode*, PlaylistTreeNode*)> isWithin =
+                [&isWithin](PlaylistTreeNode* needle, PlaylistTreeNode* hay) -> bool {
+                    if (!needle || !hay) return false;
+                    if (needle == hay) return true;
+                    for (PlaylistTreeNode* c : hay->children)
+                        if (isWithin(needle, c)) return true;
+                    return false;
+                };
+
+            for (int i = playlistRoot->children.size() - 1; i >= 0; --i) {
+                PlaylistTreeNode* child = playlistRoot->children[i];
+                if (child && child->isFolder && child->fullPath == musicPath) {
+                    if (isWithin(currentNode, child)) {
+                        currentNode = playlistRoot;
+                        isInBrowsingMode = false;
+                    }
+                    playlistRoot->children.removeAt(i);
+                    delete child;
+                }
+            }
+
+            // An empty folder still gets an entry: on a stick it is the only
+            // hint of where songs are meant to go.
+            resultNode->name = "📁 Music";
+            resultNode->parent = playlistRoot;
+            playlistRoot->children.append(resultNode);
+            updateUIFromCurrentNode();
+            triggerSavePlaylistTree();
+        }
+        s->deleteLater();
+    });
     scanner->start();
 }
 
@@ -1072,15 +1159,31 @@ void MainWindow::addFolderToCurrentNodeWithoutSave(const QString &folderPath)
 
 void MainWindow::savePlaylistTree()
 {
-    // Get JMPLAYER directory path
-    QString documentsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    QString jmplayerDir = documentsPath + "/JMPLAYER";
+    // Same folder the settings live in - the two must never split, which is what
+    // would happen if this kept computing the Documents path on its own.
+    QString jmplayerDir = SettingsManager::storageDir();
     QString playlistPath = jmplayerDir + "/playlist.json";
 
     // Create directory if it doesn't exist
     QDir dir;
     if (!dir.exists(jmplayerDir)) {
         dir.mkpath(jmplayerDir);
+    }
+
+    // Never let an empty tree overwrite a list that has something in it, unless
+    // the user is the one who emptied it. Saves are debounced and can also fire
+    // from a background scan, so a save landing while the tree was momentarily
+    // empty - during the rebuild in loadPlaylistTree, say - used to wipe the
+    // file, and an empty file then counted as "already seeded", so nothing ever
+    // brought the list back.
+    const bool userEmptiedIt = m_allowEmptyPlaylistSave;
+    m_allowEmptyPlaylistSave = false;
+    if (!userEmptiedIt && playlistRoot && playlistRoot->children.isEmpty()) {
+        QFile existing(playlistPath);
+        if (existing.exists() && existing.size() > 2) {
+            qWarning() << "[Playlist] refusing to overwrite saved list with an empty one";
+            return;
+        }
     }
 
     // Save playlist to separate JSON file
@@ -1094,12 +1197,30 @@ void MainWindow::savePlaylistTree()
         }
         rootJson["currentNodePath"] = currentPath;
 
-        QJsonDocument doc(rootJson);
-
-        QFile file(playlistPath);
-        if (file.open(QIODevice::WriteOnly)) {
-            file.write(doc.toJson(QJsonDocument::Compact));
-            file.close();
+        // Serialise first, then replace the file in one step. Opening the real
+        // file truncates it immediately, so anything going wrong between that
+        // and the write left a zero-byte playlist.json - which is how a crash
+        // during a refresh wiped the whole list, BK included, and left nothing
+        // to recover on the next launch.
+        const QByteArray payload = QJsonDocument(rootJson).toJson(QJsonDocument::Compact);
+        if (!payload.isEmpty()) {
+            const QString tmpPath = playlistPath + ".tmp";
+            QFile tmp(tmpPath);
+            if (tmp.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                const qint64 written = tmp.write(payload);
+                tmp.flush();
+                tmp.close();
+                if (written == payload.size()) {
+                    QFile::remove(playlistPath);
+                    if (!QFile::rename(tmpPath, playlistPath)) {
+                        qWarning() << "[Playlist] could not replace" << playlistPath;
+                        QFile::remove(tmpPath);
+                    }
+                } else {
+                    qWarning() << "[Playlist] short write, keeping previous playlist";
+                    QFile::remove(tmpPath);
+                }
+            }
         }
     }
 
@@ -1129,9 +1250,7 @@ void MainWindow::triggerSavePlaylistTree()
 
 void MainWindow::loadPlaylistTree()
 {
-    // Get JMPLAYER directory path
-    QString documentsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    QString jmplayerDir = documentsPath + "/JMPLAYER";
+    QString jmplayerDir = SettingsManager::storageDir();
     QString playlistPath = jmplayerDir + "/playlist.json";
 
     // Initialize clean tree first (ensure we always have a valid tree)
@@ -1374,7 +1493,12 @@ void MainWindow::loadPlaylistTree()
 
     // Check for first run samples
     SettingsManager& settings = SettingsManager::instance();
-    bool playlistJsonExists = QFile::exists(playlistPath);
+    // Existence alone used to decide this, so a playlist.json that existed but
+    // held nothing - which is what a crash mid-save left behind - skipped the
+    // seeding forever: BK never came back and no restart could recover it. What
+    // matters is whether the list actually has anything in it.
+    bool playlistJsonExists = QFile::exists(playlistPath)
+                              && playlistRoot && !playlistRoot->children.isEmpty();
 
     if (!playlistJsonExists) {
         QString samplePath = QApplication::applicationDirPath() + "/BK";
@@ -1421,9 +1545,21 @@ void MainWindow::loadPlaylistTree()
             
             addSync(bkNode, samplePath);
             settings.setValue("FirstRunSamplesLoaded", true);
-            triggerSavePlaylistTree(); 
+            triggerSavePlaylistTree();
         }
+
     }
+
+    // Portable copies keep their songs in a Music folder next to the executable,
+    // rescanned on every launch. Every other folder in the list is a snapshot
+    // taken when it was added, which is fine for a fixed library but wrong here:
+    // dropping files onto the stick and seeing nothing appear is precisely the
+    // friction this whole feature exists to remove.
+    //
+    // Deliberately not inside BK - that folder ships in the release archive, so
+    // extracting an update over it would overwrite whatever the user put there.
+    // Ordinary installs get none of this; portableMusicDir() returns empty.
+    refreshPortableMusicFolder();
 
     // Migration: Rename existing BK nodes to "📁 병코돌고래"
     std::function<void(PlaylistTreeNode*)> migrateBkName = [&](PlaylistTreeNode* node) {
@@ -1630,6 +1766,16 @@ QJsonObject MainWindow::nodeToJson(PlaylistTreeNode* node)
     nodeJson["isFolder"] = node->isFolder;
     nodeJson["isVirtual"] = node->isVirtual;
 
+    // Portable copies also get a path relative to the executable, so the list
+    // survives the stick being E: on one machine and F: on the next. Written
+    // alongside fullPath rather than instead of it: an older build ignores the
+    // extra key, and if the relative form ever resolves to nothing - the app
+    // folder alone was copied elsewhere - the loader can still fall back.
+    if (SettingsManager::isPortable() && !node->fullPath.isEmpty()) {
+        const QString rel = SettingsManager::toPortablePath(node->fullPath);
+        if (rel != node->fullPath) nodeJson["relPath"] = rel;
+    }
+
     // Convert children
     QJsonArray childrenArray;
     for (auto* child : node->children) {
@@ -1646,6 +1792,15 @@ PlaylistTreeNode* MainWindow::nodeFromJson(const QJsonObject &json, PlaylistTree
     QString fullPath = json["fullPath"].toString();
     bool isFolder = json["isFolder"].toBool();
     bool isVirtual = json["isVirtual"].toBool();
+
+    // Prefer the executable-relative path when one was stored and it still
+    // points at something; otherwise keep the absolute path, which is all an
+    // older playlist has. Virtual nodes address entries inside a zip, not the
+    // filesystem, so they are left alone.
+    if (!isVirtual && json.contains("relPath")) {
+        const QString resolved = SettingsManager::fromPortablePath(json["relPath"].toString());
+        if (!resolved.isEmpty() && QFileInfo::exists(resolved)) fullPath = resolved;
+    }
 
     // If it is a zip file and exists on disk, reconstruct it as a virtual folder structure
     if (fullPath.toLower().endsWith(".zip")) {

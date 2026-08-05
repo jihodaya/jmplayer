@@ -301,6 +301,16 @@ private:
     void addFileToCurrentNode(const QString &filePath);
     void addFolderToCurrentNode(const QString &folderPath);
     void addFileToCurrentNodeWithoutSave(const QString &filePath);
+
+    // Portable mode only: rescan the Music folder next to the executable so
+    // files dropped onto the stick show up on the next launch.
+    void refreshPortableMusicFolder();
+    bool m_portableMusicScanRunning = false;
+
+    // Set just before a save that the user's own deletion may legitimately have
+    // emptied; savePlaylistTree otherwise refuses to write an empty list over a
+    // populated one. Cleared by that save.
+    bool m_allowEmptyPlaylistSave = false;
     void addFolderToCurrentNodeWithoutSave(const QString &folderPath);
     void navigateToNode(PlaylistTreeNode* node);
     void updateUIFromCurrentNode();

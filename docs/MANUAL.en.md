@@ -121,7 +121,26 @@ JMPlayer stores its data in your **Documents** folder, under `JMPLAYER`:
 | `Documents\JMPLAYER\settings.ini` | All settings — volume, output device, repeat mode, DSP level, last played file/position, window options |
 | `Documents\JMPLAYER\playlist.json` | The playlist tree (folders and songs you added) |
 
-The folder is created automatically on first run. To fully reset the player, delete these two files; to move your setup to another PC, copy them.
+The folder is created when there is first something to save. To fully reset the player, delete these two files; to move your setup to another PC, copy them.
+
+### Portable mode - running from a USB stick
+
+Create a folder named **`cfg`** next to the executable and the player keeps its settings and playlist there instead, leaving your Documents folder completely untouched.
+
+```
+E:\JMPlayer\
+    JMPlayer_R2.5h.exe
+    cfg\        <- create this yourself; its presence turns portable mode on
+    Music\      <- created for you; put your songs here
+    BK\         <- bundled songs
+```
+
+* Nothing creates `cfg` for you. **You creating it is the signal**, so an ordinary install is never affected.
+* Delete `cfg` and the next run goes back to Documents.
+* Keep your songs in **`Music`**. The list then survives the stick being `E:` on one machine and `F:` on the next. That folder is rescanned at every launch, so files you drop in appear the next time you start the player.
+* Songs kept outside `Music` still follow along as long as they are **on the same drive**. Anything on another drive is stored with its full path, as before.
+* The location in use is shown at the bottom of the **`F1`** help.
+* Note: everything the player writes stays inside its own folder, but Windows keeps its own records (recent-documents lists and so on) that no application can suppress.
 
 ## 11. Tips
 
