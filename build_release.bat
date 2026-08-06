@@ -125,7 +125,12 @@ copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
 if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
 if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
 if exist "%SRC_DIR%\etc\LICENSES.md" copy "%SRC_DIR%\etc\LICENSES.md" "%RELEASE_DIR%\LICENSES.md"
-if exist "%SRC_DIR%\etc\.pdf" copy "%SRC_DIR%\etc\.pdf" "%RELEASE_DIR%\.pdf"
+REM PDF manuals. The previous line here named a file called ".pdf" - the Korean
+REM part of the filename had been lost somewhere - so the manual never actually
+REM reached a release. ASCII names now, for the same reason kernel images use
+REM them: a name that survives every tool in the chain.
+if exist "%SRC_DIR%\etc\JMPlayer_Manual_KO.pdf" copy "%SRC_DIR%\etc\JMPlayer_Manual_KO.pdf" "%RELEASE_DIR%\" > nul
+if exist "%SRC_DIR%\etc\JMPlayer_Manual_EN.pdf" copy "%SRC_DIR%\etc\JMPlayer_Manual_EN.pdf" "%RELEASE_DIR%\" > nul
 
 REM Nuked-SC55 drop folder. The emulator itself is NOT shipped - it is not
 REM public domain and jmp is - so only the folder and its note go out.

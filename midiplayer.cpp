@@ -1455,7 +1455,15 @@ void MidiPlayer::updateVolumeToDevice()
     // audibly falters exactly while the volume slider is being moved
     // (2026-07-27). Local output is muted during tunnelling anyway, so nothing
     // is lost by staying quiet here; ordinary MIDI playback is untouched.
-    if (!m_useInternalSynth && OplTunnelSender::instance().isEnabled())
+    //
+    // Nuked-SC55 is excluded from that: it is reached over a named pipe, not
+    // the MIDI wire, so nothing it receives can crowd the tunnel. The condition
+    // was simply "not the internal synth", which quietly swallowed the volume
+    // slider for the emulator whenever the tunnel happened to be switched on -
+    // and the tunnel setting persists between runs, so it stayed broken with no
+    // visible cause. Confirmed from a trace of what actually left the bridge:
+    // the song's own CC#7 events appeared, the slider's sixteen never did.
+    if (!m_useInternalSynth && !m_bUseSc55 && OplTunnelSender::instance().isEnabled())
         return;
 
     // Send volume update to all channels based on their original values
