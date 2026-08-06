@@ -15,7 +15,8 @@ OplTunnelSender::OplTunnelSender()
     : m_head(0), m_tail(0), m_nowMs(0), m_enabled(false), m_suppressed(false),
       m_running(false), m_cbValid(false),
       m_cntSent(0), m_cntDropped(0),
-      m_stereoMode(1), m_stereoModeSent(-1), m_needResync(false) {
+      m_stereoMode(1), m_stereoModeSent(-1),
+      m_volume(100), m_volumeSent(-1), m_needResync(false) {
     clearShadow();
     for (int i = 0; i < 512; ++i)
         m_localVal[i].store(-1, std::memory_order_relaxed);
@@ -172,6 +173,23 @@ void OplTunnelSender::sendStereoMode(int mode) {
     m_sendCb(sx);
 }
 
+void OplTunnelSender::setVolume(int percent) {
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    m_volume.store(percent, std::memory_order_relaxed);
+    // senderLoop notices m_volume != m_volumeSent and ships CmdVolume.
+}
+
+void OplTunnelSender::sendVolume(int percent) {
+    if (!m_cbValid.load(std::memory_order_acquire))
+        return;
+    std::vector<unsigned char> sx = {
+        0xF0, OplTunnel::ManufacturerNonCommercial, OplTunnel::SubID,
+        OplTunnel::CmdVolume, (unsigned char)(percent & 0x7F), 0xF7
+    };
+    m_sendCb(sx);
+}
+
 void OplTunnelSender::sendKeepalive() {
     if (!m_cbValid.load(std::memory_order_acquire))
         return;
@@ -324,6 +342,7 @@ void OplTunnelSender::senderLoop() {
             m_head.store(head, std::memory_order_release);
             sendSnapshot();
             m_stereoModeSent.store(-1, std::memory_order_relaxed); // resend below
+            m_volumeSent.store(-1, std::memory_order_relaxed);     // ditto
             firstBatch = true; // receiver re-anchors on the next batch
         }
 
@@ -334,6 +353,15 @@ void OplTunnelSender::senderLoop() {
             if (mode != m_stereoModeSent.load(std::memory_order_relaxed)) {
                 sendStereoMode(mode);
                 m_stereoModeSent.store(mode, std::memory_order_relaxed);
+            }
+        }
+
+        // Same treatment for the master volume: one byte, only when it changed.
+        {
+            const int vol = m_volume.load(std::memory_order_relaxed);
+            if (vol != m_volumeSent.load(std::memory_order_relaxed)) {
+                sendVolume(vol);
+                m_volumeSent.store(vol, std::memory_order_relaxed);
             }
         }
 

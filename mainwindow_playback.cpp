@@ -33,6 +33,7 @@
 #include <cmath>
 #include <iostream>
 #include <QStyledItemDelegate>
+#include "opltunnelsender.h"
 #include <QPainter>
 #include <QFileInfo>
 #include <QRandomGenerator>
@@ -455,6 +456,14 @@ void MainWindow::onVolumeChanged(int value)
     // AdPlug doesn't have a direct master volume in all players, 
     // but JJoMeSynth::setVolume affects both SoundFont and IMS
     JJoMeSynth::instance().setVolume(value / 127.0f);
+
+    // While an OPL song is tunnelled to the jukebox none of the above reaches
+    // it: the sound is being made on the Pi, from the register writes. Pass the
+    // slider on as a tunnel command instead - one byte, sent by the sender
+    // thread only when it changes. An older jukebox ignores commands it does
+    // not recognise, so this is safe against any receiver.
+    OplTunnelSender::instance().setVolume(value * 100 / 127);
+
     volumeValue->setText(QString::number(value));
 
     // Persist once the slider settles, not on every step. A drag or a spin of

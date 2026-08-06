@@ -1456,14 +1456,25 @@ void MidiPlayer::updateVolumeToDevice()
     // (2026-07-27). Local output is muted during tunnelling anyway, so nothing
     // is lost by staying quiet here; ordinary MIDI playback is untouched.
     //
-    // Nuked-SC55 is excluded from that: it is reached over a named pipe, not
-    // the MIDI wire, so nothing it receives can crowd the tunnel. The condition
-    // was simply "not the internal synth", which quietly swallowed the volume
-    // slider for the emulator whenever the tunnel happened to be switched on -
-    // and the tunnel setting persists between runs, so it stayed broken with no
-    // visible cause. Confirmed from a trace of what actually left the bridge:
-    // the song's own CC#7 events appeared, the slider's sixteen never did.
-    if (!m_useInternalSynth && !m_bUseSc55 && OplTunnelSender::instance().isEnabled())
+    // Two exemptions, because the original condition was just "not the internal
+    // synth" and that is far wider than the problem it was written for. The
+    // tunnel setting persists between runs, so anything it catches by accident
+    // stays broken silently, with no connection to whatever the user last did.
+    //
+    //   Nuked-SC55 travels down a named pipe, not the MIDI wire, so nothing it
+    //   receives can crowd the tunnel.
+    //
+    //   A MIDI file playing through this class means the OPL players are
+    //   stopped, so the tunnel is sending nothing and the wire is ours. Only
+    //   when an OPL song is the one tunnelling does the traffic actually
+    //   compete - and that is exactly when `playing` is false here.
+    //
+    // Note that during a genuine OPL tunnel the slider cannot control the
+    // jukebox at all: its COplTunnelSynth discards channel messages, so volume
+    // there belongs to the jukebox's own control. Nothing is lost by staying
+    // quiet in that case.
+    if (!m_useInternalSynth && !m_bUseSc55 && !playing
+        && OplTunnelSender::instance().isEnabled())
         return;
 
     // Send volume update to all channels based on their original values

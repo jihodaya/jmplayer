@@ -52,6 +52,13 @@ public:
     // the Pi).
     void setStereoMode(int mode);
 
+    // UI thread: master volume for the jukebox, 0-100 percent. Shipped by the
+    // sender thread the same way the stereo mode is, so the wire sees one byte
+    // when the slider settles instead of sixteen CC#7 messages the receiver
+    // would discard anyway. Harmless against an older jukebox: its parser
+    // ignores commands it does not know.
+    void setVolume(int percent);
+
     // Audio thread: mark a chip reset (OPL song start / re-init). Ordered with
     // surrounding writes. Also clears the local-state mirror.
     void reset();
@@ -93,6 +100,7 @@ private:
     void sendSnapshot();  // sender thread: CmdReset + full m_localVal dump (CmdWrite)
     void sendKeepalive(); // sender thread: empty CmdBatch (keeps the Pi in live mode)
     void sendStereoMode(int mode); // sender thread: CmdStereo
+    void sendVolume(int percent);  // sender thread: CmdVolume
     void clearShadow();
 
     static constexpr size_t RingSize = 1u << 15; // 32768 entries, power of 2
@@ -136,6 +144,10 @@ private:
     // needs resend, e.g. right after a resync snapshot).
     std::atomic<int> m_stereoMode;
     std::atomic<int> m_stereoModeSent;
+
+    // Master volume (0-100) + what the sender last shipped, same convention.
+    std::atomic<int> m_volume;
+    std::atomic<int> m_volumeSent;
 
     // Set on enable (and after long idle): the sender thread ships a CmdReset +
     // full local-state snapshot before the next stream, so the Pi chip is in

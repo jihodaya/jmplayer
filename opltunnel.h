@@ -31,6 +31,14 @@ enum Command : uint8_t {
     // whenever jmp's stereo mode changes and after every resync snapshot, so
     // the receiver's OPL pan policy follows jmp's setting (2026-07-16).
     CmdStereo = 0x04,
+    // Master volume, 0-100 percent in one byte. The tunnel occupies the same
+    // 31250 baud wire as ordinary MIDI, so jmp's volume slider cannot simply
+    // send sixteen CC#7 messages - that costs ~15 ms of wire time and pushes
+    // the receiver's batch schedule past its cushion, which is audible. The
+    // receiver also ignores channel messages while tunnelling, so they would
+    // achieve nothing anyway. One byte, sent only when the slider settles,
+    // costs nothing next to a batch (2026-08-06).
+    CmdVolume = 0x05,
 };
 
 constexpr unsigned BytesPerWrite = 3;
