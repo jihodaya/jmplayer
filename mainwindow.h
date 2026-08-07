@@ -128,6 +128,14 @@ private slots:
     void updateOplTunnelButtonStyle();
     void ensureJJoMeSynthReady();
     void onSelectBankFile();
+
+    // Unregister the external OPL bank for the format in play and reload the
+    // current song, so per-song .BNK files apply again.
+    void clearExternalBank(bool bIsGyb, bool bIsOka);
+
+    // Re-send bank name and instrument list to the channel monitor after a
+    // mid-song bank change.
+    void refreshOplChannelMonitor();
     void showHelpDialog();
     void toggleRecording();
 

@@ -139,6 +139,17 @@ void MainWindow::playPause()
                     if (!loaded) qWarning() << "[MainWindow] Failed to load GYB file:" << filePath;
                 } else if (isImsFile) {
                     qDebug() << "[MainWindow] Loading IMS/OPL file:" << filePath;
+                    // Set the bank BEFORE loading, and clear it when none is
+                    // registered - the same shape GYB and OKA already use. IMS
+                    // did neither: it was applied further down, after the file
+                    // had been read, so a registered bank was ignored for the
+                    // first song of a session and honoured from the second on,
+                    // and it was never cleared, so a bank chosen once overrode
+                    // every song's own .BNK for good (reported 2026-08-07).
+                    SettingsManager& settings = SettingsManager::instance();
+                    QString imsExt = settings.value("Synth/ExternalImsBank", "").toString();
+                    imsPlayer->setExternalBankPath(
+                        (!imsExt.isEmpty() && QFileInfo::exists(imsExt)) ? imsExt : QString());
                     loaded = imsPlayer->loadFile(filePath);
                 } else if (playOkaViaOpl) {
                     qDebug() << "[MainWindow] Loading OKA file via OPL:" << filePath;
@@ -223,9 +234,10 @@ void MainWindow::playPause()
             } else if (isImsFile) {
                 if (!JJoMeSynth::instance().isInitialized()) {
                     SettingsManager& settings = SettingsManager::instance();
-                    QString extBank = settings.value("Synth/ExternalImsBank", "").toString();
-    if (!extBank.isEmpty() && QFileInfo::exists(extBank)) imsPlayer->setExternalBankPath(extBank);
-    QString sfPath = settings.value("Synth/SoundFontPath", "").toString();
+                    // The bank is applied before loadFile above; setting it here
+                    // as well was what made the first song of a session behave
+                    // differently from the rest.
+                    QString sfPath = settings.value("Synth/SoundFontPath", "").toString();
                     if (sfPath.isEmpty() || !QFileInfo::exists(sfPath)) {
                         QDir sfDir(QApplication::applicationDirPath() + "/SoundFonts");
                         if (sfDir.exists()) {
@@ -1107,6 +1119,11 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         QString okaExt = sOka.value("Synth/ExternalOkaBank", "").toString();
         okaPlayer->setExternalBankPath((!okaExt.isEmpty() && QFileInfo::exists(okaExt)) ? okaExt : QString());
     }
+    if (isIms) {
+        SettingsManager& sIms = SettingsManager::instance();
+        QString imsExt = sIms.value("Synth/ExternalImsBank", "").toString();
+        imsPlayer->setExternalBankPath((!imsExt.isEmpty() && QFileInfo::exists(imsExt)) ? imsExt : QString());
+    }
 
     bool loaded;
     if (isGyb)              loaded = gybPlayer->loadFile(filePath);
@@ -1414,9 +1431,8 @@ void MainWindow::onDeviceChanged(int index)
         
         if (deviceName == "[JJoMe Synth (SoundFont)]") {
             SettingsManager& settings = SettingsManager::instance();
-            QString extBank = settings.value("Synth/ExternalImsBank", "").toString();
-    if (!extBank.isEmpty() && QFileInfo::exists(extBank)) imsPlayer->setExternalBankPath(extBank);
-    QString sfPath = settings.value("Synth/SoundFontPath", "").toString();
+            // Bank handled before loadFile, alongside GYB and OKA.
+            QString sfPath = settings.value("Synth/SoundFontPath", "").toString();
             
             // Auto-detect a soundfont if none is configured
             if (sfPath.isEmpty() || !QFileInfo::exists(sfPath)) {

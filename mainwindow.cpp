@@ -1962,7 +1962,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.5h";
+    QString title = "🎵 JJoMe MIDI Player v2.5i";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -2123,6 +2123,84 @@ void MainWindow::updateOplTunnelButtonStyle()
 }
 
 
+// Push the current OPL player's bank name and instrument list into the channel
+// monitor. Needed after any mid-song bank change: the song reloads and sounds
+// right immediately, but the monitor keeps its instrument cards from the old
+// bank until something re-sends them, and nothing did except the IMS branch of
+// the bank picker (reported 2026-08-07).
+void MainWindow::refreshOplChannelMonitor()
+{
+    if (!channelMonitor || currentFile.isEmpty())
+        return;
+
+    if (isGybFile(currentFile)) {
+        channelMonitor->setImsMode(true, gybPlayer->getBankName(),
+                                   gybPlayer->getInstruments(), "GYB");
+        channelMonitor->updateVoiceInstrumentNames(gybPlayer->getVoiceInstrumentNames());
+    } else if (isOkaOplFile(currentFile)) {
+        channelMonitor->setImsMode(true, okaPlayer->getBankName(),
+                                   okaPlayer->getInstruments(), "OKA");
+        channelMonitor->updateVoiceInstrumentNames(okaPlayer->getVoiceInstrumentNames());
+    } else if (isOplFile(currentFile)) {
+        channelMonitor->setImsMode(true, imsPlayer->getBankName(),
+                                   imsPlayer->getInstruments(),
+                                   QFileInfo(currentFile).suffix().toUpper());
+        channelMonitor->updateVoiceInstrumentNames(imsPlayer->getVoiceInstrumentNames());
+    }
+}
+
+// Drop the registered bank and reload the current song so the change is heard
+// at once, mirroring what choosing a bank does. Clearing the setting alone
+// would look like nothing happened until the next song.
+void MainWindow::clearExternalBank(bool bIsGyb, bool bIsOka)
+{
+    SettingsManager& settings = SettingsManager::instance();
+
+    if (bIsGyb) {
+        gybPlayer->setExternalBankPath("");
+        settings.remove("Synth/ExternalGybBank");
+    } else if (bIsOka) {
+        okaPlayer->setExternalBankPath("");
+        settings.remove("Synth/ExternalOkaBank");
+    } else {
+        imsPlayer->setExternalBankPath("");
+        settings.remove("Synth/ExternalImsBank");
+    }
+
+    if (currentFile.isEmpty())
+        return;
+
+    const bool bWasPlaying = isPlaying;
+    if (bIsGyb && currentFile.toLower().endsWith(".gyb")) {
+        const unsigned long nPos = gybPlayer->getPosition();
+        gybPlayer->stop();
+        if (pianoRollWindow) pianoRollWindow->clearNotes();
+        if (gybPlayer->loadFile(currentFile)) {
+            if (bWasPlaying) { gybPlayer->setPosition(nPos); gybPlayer->play(); }
+            updateTrackInfo();
+            refreshOplChannelMonitor();
+        }
+    } else if (bIsOka && isOkaFile(currentFile)) {
+        const unsigned long nPos = okaPlayer->getPosition();
+        okaPlayer->stop();
+        if (pianoRollWindow) pianoRollWindow->clearNotes();
+        if (okaPlayer->loadFile(currentFile)) {
+            if (bWasPlaying) { okaPlayer->setPosition(nPos); okaPlayer->play(); }
+            updateTrackInfo();
+            refreshOplChannelMonitor();
+        }
+    } else if (!bIsGyb && !bIsOka && isOplFile(currentFile)) {
+        const unsigned long nPos = imsPlayer->getPosition();
+        imsPlayer->stop();
+        if (pianoRollWindow) pianoRollWindow->clearNotes();
+        if (imsPlayer->loadFile(currentFile)) {
+            if (bWasPlaying) { imsPlayer->setPosition(nPos); imsPlayer->play(); }
+            updateTrackInfo();
+            refreshOplChannelMonitor();
+        }
+    }
+}
+
 void MainWindow::onSelectBankFile()
 {
     QString targetFile = currentFile;
@@ -2137,6 +2215,38 @@ void MainWindow::onSelectBankFile()
     QString currentBank = isGyb ? gybPlayer->getExternalBankPath()
                                 : (isOka ? okaPlayer->getExternalBankPath()
                                          : imsPlayer->getExternalBankPath());
+
+    // Ask first, because picking a bank used to be a one-way trip: the button
+    // went straight to the file dialog and nothing could clear the choice
+    // again. A registered bank takes priority over the .BNK sitting next to
+    // the song, so a user who once picked one - typically STANDARD.BNK, to
+    // fix a song that sounded wrong - silently lost per-song banks for every
+    // IMS file afterwards, with no way back (reported 2026-08-07).
+    if (!currentBank.isEmpty()) {
+        QMessageBox box(this);
+        box.setWindowTitle(LSTR("OPL 뱅크", "OPL Bank"));
+        box.setIcon(QMessageBox::Question);
+        box.setText(LSTR("현재 등록된 뱅크: ", "Currently registered bank: ")
+                    + QFileInfo(currentBank).fileName());
+        box.setInformativeText(
+            LSTR("등록을 해제하면 곡과 같은 이름의 .BNK 파일을 자동으로 사용합니다.",
+                 "Unregistering returns to using the .BNK file named after the song."));
+        QPushButton* pRegister   = box.addButton(LSTR("등록", "Register"),
+                                                 QMessageBox::AcceptRole);
+        QPushButton* pUnregister = box.addButton(LSTR("등록 해제", "Unregister"),
+                                                 QMessageBox::DestructiveRole);
+        box.addButton(LSTR("취소", "Cancel"), QMessageBox::RejectRole);
+        box.setDefaultButton(pRegister);
+        box.exec();
+
+        if (box.clickedButton() == pUnregister) {
+            clearExternalBank(isGyb, isOka);
+            return;
+        }
+        if (box.clickedButton() != pRegister)
+            return;                          // cancelled
+    }
+
     QString initialDir;
     if (currentBank.isEmpty()) {
         initialDir = QApplication::applicationDirPath();
@@ -2166,6 +2276,7 @@ void MainWindow::onSelectBankFile()
                         gybPlayer->play();
                     }
                     updateTrackInfo();
+                    refreshOplChannelMonitor();
                 }
             }
         } else if (isOka) {
@@ -2184,6 +2295,7 @@ void MainWindow::onSelectBankFile()
                         okaPlayer->play();
                     }
                     updateTrackInfo();
+                    refreshOplChannelMonitor();
                 }
             }
         } else {
@@ -2202,10 +2314,7 @@ void MainWindow::onSelectBankFile()
                         imsPlayer->play();
                     }
                     updateTrackInfo();
-                    if (channelMonitor) {
-                        channelMonitor->setImsMode(true, imsPlayer->getBankName(), imsPlayer->getInstruments(), QFileInfo(currentFile).suffix().toUpper());
-                        channelMonitor->updateVoiceInstrumentNames(imsPlayer->getVoiceInstrumentNames());
-                    }
+                    refreshOplChannelMonitor();
                 }
             }
         }
