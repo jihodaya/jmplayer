@@ -1,6 +1,9 @@
 #include "okabackend.h"
+#include "uistrings.h"
 #include "okafilehandler.h"
+#include "bnkfill.h"
 #include <QFile>
+#include <QHash>
 #include <QFileInfo>
 #include <QDir>
 #include <QCoreApplication>
@@ -267,6 +270,87 @@ bool OkaBackend::parseMidiData(const QByteArray& midiData)
     return true;
 }
 
+// See GybBackend::loadEmbeddedPatches - identical idea, identical record
+// layout. An .OKA keeps the table after its MIDI instead of after the channel
+// data, but the 38-byte records are the same thing.
+void OkaBackend::FixRhythmFrequency(int voice)
+{
+    // Same octave correction as GybBackend - NORE45 shares GAYOBANG's OPL
+    // driver. FUN_19aa_1162 is FUN_255a_1222 function for function: it writes
+    // 0xBD with the rhythm bit, sets register 8 to 0x40, then stores note 24 on
+    // channel 8 and note 31 on channel 7 and takes the channel count to 11.
+    // Those notes are 65.4 Hz and 98.0 Hz through the driver's note table;
+    // AdPlug's kTomTomNote / kSnareNote land an octave up.
+    if (voice < 7 || voice > 10) return;
+    opl->write(0xA7, 0x05); opl->write(0xB7, 0x0A);   // fnum 517, block 2
+    opl->write(0xA8, 0xB2); opl->write(0xB8, 0x06);   // fnum 690, block 1
+}
+
+void OkaBackend::SetChannelVolume(int voice, uint8_t volume)
+{
+    // Channel volume including the modulator of an additive patch. NORE45's TL
+    // writer carries GAYOBANG's condition unchanged - scale when the operator is
+    // the carrier, or its own fm_type is 0, or it is a rhythm drum operator -
+    // while AdPlug's SetVolume only ever touches the carrier.
+    SetVolume(voice, volume);
+    if (voice < 0 || voice >= 9 || voice >= 7) return;   // 7..10 are one operator each
+    if (!m_voiceAdditive[voice]) return;
+
+    static const int kOpTable[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
+    const uint8_t ksltl = m_voiceModKsltl[voice];
+    uint16_t level = 63 - (ksltl & 0x3F);
+    level = (uint16_t)(volume * level);
+    level += level + 127;
+    level = 63 - (level / 254);
+    opl->write(0x40 + kOpTable[voice], (int)((ksltl & 0xC0) | level));
+}
+
+void OkaBackend::NoteInstrument(int voice, int slot, int instIdx)
+{
+    SetInstrument(voice, instIdx);
+    if (voice < 0 || voice >= 18) return;
+    m_voiceAdditive[voice] = false;
+    m_voiceModKsltl[voice] = 0;
+    if (slot >= 0 && slot < m_instParams.size()) {
+        const QByteArray& q = m_instParams[slot];
+        if (q.size() >= kEmbeddedParamLen) {
+            m_voiceModKsltl[voice] = (uint8_t)(((uint8_t)q[0] << 6) | ((uint8_t)q[8] & 0x3F));
+            m_voiceAdditive[voice] = ((uint8_t)q[12] == 0);
+        }
+    }
+}
+
+bool OkaBackend::loadEmbeddedPatches()
+{
+    if (m_slotNames.isEmpty() || m_instParams.isEmpty())
+        return false;
+
+    m_slotToInstIndex.clear();
+    int loaded = 0;
+    for (const QByteArray& params : m_instParams) {
+        if (params.size() < kEmbeddedParamLen) {
+            m_slotToInstIndex.append(-1);
+            continue;
+        }
+        // Waveform is two bits in the original loader; see GybBackend.
+        QByteArray p2 = params;
+        p2[26] = (char)(p2[26] & 3);
+        p2[27] = (char)(p2[27] & 3);
+        const int idx = load_instrument_data(
+            reinterpret_cast<uint8_t*>(const_cast<char*>(p2.constData())),
+            kEmbeddedParamLen);
+        m_slotToInstIndex.append(idx);
+        if (idx >= 0) ++loaded;
+    }
+
+    // Shown in the channel monitor so it is obvious the song is not
+    // leaning on any external bank.
+    m_bankName = "embedded bank";
+    qDebug() << "[OkaBackend] embedded instruments:" << loaded << "/"
+             << m_slotNames.size();
+    return loaded > 0;
+}
+
 bool OkaBackend::load(const std::string& filename, const CFileProvider& fp)
 {
     Q_UNUSED(fp);
@@ -308,15 +392,24 @@ bool OkaBackend::load(const std::string& filename)
     if (m_title.isEmpty()) m_title = QFileInfo(qf).fileName();
     
     m_slotNames = OkaFileHandler::extractInstrumentNames(qf);
+    m_instParams = OkaFileHandler::extractInstrumentParams(qf);
     std::cout << "   [OkaBackend] slotNames extracted, count = " << m_slotNames.size() << std::endl << std::flush;
-    
-    std::cout << "   [OkaBackend] calling resolveBnkPatches..." << std::endl << std::flush;
-    if (!resolveBnkPatches(filename)) {
-        std::cout << "   [OkaBackend] resolveBnkPatches returned false." << std::endl << std::flush;
+
+    // .OKA plays its own embedded instruments and nothing else - no external
+    // bank, ever, whatever is registered elsewhere in the program (user
+    // decision, 2026-08-11). NORE45 does resolve names from STANDARD.BNK the
+    // way GAYOBANG does, but .OKA sounds right on the embedded table as it is,
+    // so we deliberately do not follow it here. A file with no usable table
+    // falls through to AdPlug's default instrument rather than to a bank.
+    fillEmptyInstrumentSlots(m_slotNames, m_instParams, qf,
+                             kEmbeddedParamLen, "[OkaBackend]");
+    if (loadEmbeddedPatches()) {
+        std::cout << "   [OkaBackend] using the song's embedded instruments." << std::endl << std::flush;
+    } else {
+        std::cout << "   [OkaBackend] no usable instrument table - AdPlug defaults." << std::endl << std::flush;
         m_slotToInstIndex.clear();
         for (int i = 0; i < m_slotNames.size(); ++i) m_slotToInstIndex.append(-1);
     }
-    std::cout << "   [OkaBackend] resolveBnkPatches completed." << std::endl << std::flush;
     
     rewind(0);
     std::cout << "   [OkaBackend] rewind completed. returning true." << std::endl << std::flush;
@@ -330,6 +423,9 @@ void OkaBackend::rewind(int subsong)
     // Enable rhythm mode to match percussive voice numbering
     // and correct drum timbre for MIDI channels 10 mapping.
     SetRhythmMode(1);
+
+    // NOTE-SEL, as FUN_19aa_1162 does; AdPlug's init leaves it clear.
+    opl->write(0x08, 0x40);
 
     m_currentTick = 0;
     m_eventIdx = 0;
@@ -348,7 +444,7 @@ void OkaBackend::rewind(int subsong)
 
     // Initialize voices volume and pitch bend
     for (int i = 0; i < 11; ++i) {
-        SetVolume(i, 100);
+        SetChannelVolume(i, 100);
         ChangePitch(i, 0x2000); // 8192 centered
     }
 }
@@ -374,9 +470,19 @@ bool OkaBackend::advanceOneTick()
         unsigned char msgType = status & 0xF0;
         int channel = status & 0x0F;
 
-        // Skip channel 11 (index 10) which is Johab lyrics note-on marker
-        // Also limit channel to < 11 (MAX_VOICES) to prevent CcomposerBackend heap corruption
-        if (channel < 11 && channel != 10) {
+        // Channels 0-10 map 1:1 onto AdPlug's 11 voices; anything above would
+        // index past MAX_VOICES and corrupt CcomposerBackend's caches.
+        //
+        // Channel 10 used to be dropped here as a "Johab lyrics marker". It is
+        // not - it is the hi-hat. In rhythm mode AdPlug's voices 6-10 are bass
+        // drum, snare, tom, cymbal and hi-hat, and every .OKA follows exactly
+        // that layout: SOVIRGIN.OKA's channel 10 carries 1,488 note-ons on GM
+        // notes 42/46 (closed/open hi-hat) and 890 program changes alternating
+        // between its CLHIHAT0 and OPHIHAT slots. Its GYB twin plays the same
+        // channel (GybBackend loops ch 0..10), which is why only .OKA came out
+        // sounding wrong. Lyric timing comes from the trailing sync block, not
+        // from this channel - see MainWindow's OKA lyric path.
+        if (channel < 11) {
             switch (msgType) {
                 case 0x90: { // Note On
                     int note = ev.data1 + m_userKeyTranspose;
@@ -398,9 +504,10 @@ bool OkaBackend::advanceOneTick()
                         // GYB which writes its volume stream per note.
                         int eff = vel;
                         if (eff > 127) eff = 127;
-                        SetVolume(channel, (uint8_t)eff);
+                        SetChannelVolume(channel, (uint8_t)eff);
                         m_lastVel[channel] = vel;
                         NoteOn(channel, note);
+                        FixRhythmFrequency(channel);
                         m_voiceNote[channel] = note;
                         // Record the onset for the level meter (peak = velocity).
                         if (vel > m_voiceAttack[channel]) m_voiceAttack[channel] = vel;
@@ -424,19 +531,29 @@ bool OkaBackend::advanceOneTick()
                     if (prog >= 0 && prog < m_slotToInstIndex.size()) {
                         int instIdx = m_slotToInstIndex[prog];
                         if (instIdx >= 0) {
-                            int savedNote = m_voiceNote[channel];
-                            if (savedNote >= 0) {
-                                NoteOff(channel);
-                            }
-                            SetInstrument(channel, instIdx);
-                            if (savedNote >= 0) {
-                                // Re-apply the held note's volume, since
-                                // SetInstrument resets the carrier TL.
-                                int eff = m_lastVel[channel];
-                                if (eff > 127) eff = 127;
-                                SetVolume(channel, (uint8_t)eff);
-                                NoteOn(channel, savedNote);
-                            }
+                            // Load the instrument; do NOT re-strike a sounding
+                            // note. Keying the held note off and on again turns
+                            // every mid-note instrument change into an extra
+                            // hit - see the same change in GybBackend, where it
+                            // was the second sound behind SOVIRGIN's closing
+                            // bell. NORE45 settles it: its 0xC0 handler
+                            // (FUN_1bd4_0142) calls the instrument loader and
+                            // nothing else.
+                            //
+                            // It matters more here than in GYB. The Oksori
+                            // format barely uses note-offs - 901 against
+                            // 119,984 note-ons across the library, 0.75% - so a
+                            // channel's note stays held until the next one, and
+                            // 3,282 of 4,018 program changes (82%) landed on a
+                            // sounding voice. That many stray hits: 60 of 63
+                            // songs change, BOOCKBOY loses a peak of 8,889 at
+                            // its ending and TJA one of 16,063 mid-song.
+                            //
+                            // The volume re-apply that used to follow is not
+                            // needed either: SetInstrument writes the carrier
+                            // TL through GetKSLTL(), which already folds in the
+                            // volume that note-on set from the velocity.
+                            NoteInstrument(channel, prog, instIdx);
                         }
                     }
                     m_voiceSlot[channel] = prog;
@@ -452,16 +569,38 @@ bool OkaBackend::advanceOneTick()
                         if (m_voiceNote[channel] >= 0) {
                             int eff = ev.data2;
                             if (eff > 127) eff = 127;
-                            SetVolume(channel, (uint8_t)eff);
+                            SetChannelVolume(channel, (uint8_t)eff);
                         }
                     }
                     break;
                 }
                 case 0xE0: { // Pitch Bend
-                    // MIDI pitch bend is 14-bit: data1 | (data2 << 7).
-                    // AdPlug ChangePitch expects 0..0x3FFF (center 0x2000).
-                    int bend = ev.data1 | (ev.data2 << 7);
-                    ChangePitch(channel, (uint16_t)bend);
+                    // NORE45 does not hand the raw 14-bit bend to the AdLib
+                    // library - it widens it first. Its handler is
+                    //
+                    //   ChangePitch(voice, ((bend - 0x2000) * 5 + 0x3ffc) / 2)
+                    //
+                    // (NORE45.EXE.c FUN_1bd4_0105, written there as an OR with
+                    // 0xe000 because the deviation is formed in 16-bit
+                    // arithmetic). So a deviation is scaled by 2.5 and
+                    // re-centred on 8190.
+                    //
+                    // Passing the raw value through, as this did, made every
+                    // .OKA bend 2.5x too shallow. The song data is not the
+                    // problem: a .GYB and its .OKA twin hold the same music,
+                    // and their bend streams are the same curve at different
+                    // scales - GYB stores a 0..20 byte that GAYOBANG multiplies
+                    // by 0x333 (819/step, GAYOBANG.c:30115), the .OKA converter
+                    // wrote 0x2000 + (raw-10)*300 (300/step). Only after this
+                    // x2.5 does the .OKA reach 750/step and land next to the
+                    // .GYB, which is what the two originals actually sound
+                    // like. SOVIRGIN's channels 0 and 1 are a detuned unison,
+                    // so the error was plainly audible as mistuning.
+                    const int bend = ev.data1 | (ev.data2 << 7);
+                    int scaled = ((bend - 0x2000) * 5 + 0x3ffc) / 2;
+                    if (scaled < 0)      scaled = 0;      // real files stay
+                    if (scaled > 0x3FFF) scaled = 0x3FFF; // well inside range
+                    ChangePitch(channel, (uint16_t)scaled);
                     break;
                 }
             }

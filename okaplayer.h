@@ -80,6 +80,7 @@ private:
     std::atomic<bool> m_playing;
     unsigned int      m_sampleRate;
     std::atomic<unsigned long> m_position;
+    double m_positionRemainder = 0.0;  // sub-millisecond carry (audio thread)
     std::atomic<float>         m_sampleCounter;
     std::atomic<int>           m_volume;
     std::atomic<int>           m_dspLevel;

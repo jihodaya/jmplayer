@@ -224,7 +224,7 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
                 gybPlayer->play();
                 qDebug() << "[MainWindow] GYB play() called";
-                dspButton->show(); bankButton->show(); oplTunnelButton->show();
+                dspButton->show(); bankButton->hide(); oplTunnelButton->show();
                 updateDspButtonStyle();
                 if (channelMonitor) {
                     channelMonitor->setImsMode(true, gybPlayer->getBankName(),
@@ -265,7 +265,7 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setImsPlayer(nullptr);
                 JJoMeSynth::instance().setOkaPlayer(okaPlayer);
                 okaPlayer->play();
-                dspButton->show(); bankButton->show(); oplTunnelButton->show();
+                dspButton->show(); bankButton->hide(); oplTunnelButton->show();
                 updateDspButtonStyle();
                 if (channelMonitor) {
                     channelMonitor->setImsMode(true, okaPlayer->getBankName(),
@@ -1152,7 +1152,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
         gybPlayer->play();
-        dspButton->show(); bankButton->show(); oplTunnelButton->show();
+        dspButton->show(); bankButton->hide(); oplTunnelButton->show();
         updateDspButtonStyle();
         if (channelMonitor)
             channelMonitor->setImsMode(true, gybPlayer->getBankName(),
@@ -1173,7 +1173,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(okaPlayer);
         okaPlayer->play();
-        dspButton->show(); bankButton->show(); oplTunnelButton->show();
+        dspButton->show(); bankButton->hide(); oplTunnelButton->show();
         updateDspButtonStyle();
         if (channelMonitor)
             channelMonitor->setImsMode(true, okaPlayer->getBankName(),
@@ -1290,7 +1290,10 @@ void MainWindow::onFileSelected()
         if (isGyb || isIms || isOka) {
             dspButton->show();
             oplTunnelButton->show();
-            bankButton->show();
+            // Only the AdLib formats take an external bank. GYB and OKA carry
+            // their own instruments, so offering the picker there could only
+            // make a song sound wrong.
+            bankButton->setVisible(isIms && !isGyb && !isOka);
             updateDspButtonStyle();
         } else {
             dspButton->hide();

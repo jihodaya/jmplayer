@@ -51,6 +51,12 @@ public:
     /// 슬롯을 찾지 못하면 빈 리스트.
     static QStringList extractInstrumentNames(const QString& filePath);
 
+    /// The 28 OPL parameter bytes of each embedded instrument record, in the
+    /// same order as extractInstrumentNames(). This is the instrument itself -
+    /// the record layout matches a .BNK entry minus its mode/voice-number
+    /// header, so the song needs no external bank at all.
+    static QList<QByteArray> extractInstrumentParams(const QString& filePath);
+
     /// 가사 싱크 마커들의 틱 정보를 추출.
     /// 마커의 오프셋을 활용하여 전체 음절 수에 매핑된 정확한 틱 목록을 반환한다.
     static QList<unsigned long> extractLyricMarkerTicks(const QString& filePath);

@@ -136,6 +136,10 @@ private slots:
     // Re-send bank name and instrument list to the channel monitor after a
     // mid-song bank change.
     void refreshOplChannelMonitor();
+
+    // One-time cleanup of GYB/OKA external-bank settings, which no longer
+    // apply and can no longer be cleared from the UI.
+    void dropObsoleteOplBankSettings();
     void showHelpDialog();
     void toggleRecording();
 

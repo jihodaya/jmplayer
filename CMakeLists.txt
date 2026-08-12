@@ -179,6 +179,7 @@ set(SOURCES
     gybfilehandler.cpp
     okafilehandler.cpp
     okabackend.cpp
+    bnkfill.cpp
     okaplayer.cpp
     gybplayer.cpp
     gybbackend.cpp

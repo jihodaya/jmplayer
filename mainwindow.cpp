@@ -1178,6 +1178,8 @@ void MainWindow::loadSettings()
 {
     SettingsManager& settings = SettingsManager::instance();
 
+    dropObsoleteOplBankSettings();
+
     // Auto-discover SoundFonts in "SoundFonts" directory and add them if not present
     QStringList sfList = settings.value("Synth/SoundFontList", QStringList()).toStringList();
     bool sfListChanged = false;
@@ -1962,7 +1964,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.5i";
+    QString title = "🎵 JJoMe MIDI Player v2.5k.2";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -2128,6 +2130,24 @@ void MainWindow::updateOplTunnelButtonStyle()
 // right immediately, but the monitor keeps its instrument cards from the old
 // bank until something re-sends them, and nothing did except the IMS branch of
 // the bank picker (reported 2026-08-07).
+// GYB and OKA stopped taking an external bank once they were made to use the
+// instruments the song carries. A bank registered before that change would sit
+// in the settings unreachable - the BNK button is hidden for those formats now,
+// so nothing could clear it - and the backends no longer consult it anyway.
+// Drop it once, so the settings match what the program actually does.
+void MainWindow::dropObsoleteOplBankSettings()
+{
+    SettingsManager& settings = SettingsManager::instance();
+    for (const char* key : { "Synth/ExternalGybBank", "Synth/ExternalOkaBank" }) {
+        if (!settings.value(key, "").toString().isEmpty()) {
+            qDebug() << "[Bank] dropping obsolete setting" << key;
+            settings.remove(key);
+        }
+    }
+    if (gybPlayer) gybPlayer->setExternalBankPath("");
+    if (okaPlayer) okaPlayer->setExternalBankPath("");
+}
+
 void MainWindow::refreshOplChannelMonitor()
 {
     if (!channelMonitor || currentFile.isEmpty())

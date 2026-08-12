@@ -1,5 +1,6 @@
 #include "gybplayer.h"
 #include "gybbackend.h"
+#include "settingsmanager.h"
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
 #include <QDebug>
@@ -18,6 +19,9 @@
 // InterceptingOpl — write side-effect capture for the channel monitor.
 // Mirrors ImsPlayer::InterceptingOpl so GYB's voice/instrument level meters
 // behave identically to IMS (key-on detection + carrier TL-derived volume).
+// Rhythm-operator trim, 0.75 dB per step: 0 = off, 6 = -4.5 dB, 8 = -6 dB.
+static const int kDrumTLOffset = 6;
+
 class GybPlayer::InterceptingOpl : public CNemuopl {
 public:
     struct ShadowVoice {
@@ -98,6 +102,32 @@ public:
     void write(int reg, int val) override {
         int bankOffset = (reg >= 0x100) ? 9 : 0;
         int baseReg    = reg & 0xFF;
+
+        // Silent lead-in (see GybBackend::isMutedTick): the driver still runs,
+        // so instruments, volumes and pitches are programmed exactly as the song
+        // expects - only the key-on bits are held down, and nothing sounds.
+        // Doing it here rather than zeroing the output means the far end of the
+        // OPL tunnel stays silent too, without suppressing the wire.
+        if (m_muteKeys) {
+            if (baseReg >= 0xB0 && baseReg <= 0xB8) val &= ~0x20;
+            else if (baseReg == 0xBD)               val &= ~0x1F;
+        }
+
+        // Uniform trim of the five rhythm operators.
+        //
+        // Against the real-chip capture of SOVIRGIN the rhythm section runs hot
+        // by about this much across its whole range - at -4.5 dB every band from
+        // 80 Hz to 12 kHz lands within 0.6 dB of the chip, including the hi-hat
+        // and cymbal top end, which is why this is a level offset and not a
+        // filter. Unlike everything else in this backend it is measured rather
+        // than derived from GAYOBANG, and it is fitted to one song from one
+        // capture, so treat it as a voicing choice until a second real-chip
+        // recording confirms the mechanism.
+        if (kDrumTLOffset && baseReg >= 0x50 && baseReg <= 0x55 && reg < 0x100) {
+            int tl = (val & 0x3F) + kDrumTLOffset;
+            if (tl > 63) tl = 63;
+            val = (val & 0xC0) | tl;
+        }
 
         // OPL3 모드 끄기(OPL2 복원) 방지 필터링
         if (reg == 0x105) {
@@ -215,8 +245,11 @@ public:
             write(0xBD, 0x20); // keep rhythm mode on, clear the 5 drum key bits
     }
 
+    void setKeyMute(bool mute) { m_muteKeys = mute; }
+
     int originalPanReg[18];
 private:
+    bool  m_muteKeys = false;
     bool* m_keyOn;
     int*  m_volume;
     int*  m_regA;
@@ -266,7 +299,14 @@ bool GybPlayer::loadFile(const QString& fileName)
     if (m_opl)     { delete m_opl;     m_opl     = nullptr; }
 
     m_opl     = new InterceptingOpl(m_sampleRate, m_oplKeyOn, m_oplVolume, m_oplRegA, m_oplRegB);
+    // Set this BEFORE the backend loads: load() ends in rewind(0), which
+    // programs every voice's instrument, volume and pitch. Enabling the
+    // doubling afterwards left bank 1 holding the zeros init() wrote, so only
+    // voices that happened to get a later program change were ever doubled.
+
     m_backend = new GybBackend(m_opl);
+    if (!m_externalBankPath.isEmpty())
+        m_backend->setExternalBankPath(m_externalBankPath);
 
     // toUtf8, NOT QFile::encodeName. The backend turns this narrow string
     // straight back into a QString with QString::fromStdString, which is UTF-8,
@@ -304,6 +344,9 @@ bool GybPlayer::loadFile(const QString& fileName)
     }
     m_duration = (unsigned long)totalMs;
     m_backend->rewind(0);
+
+    m_introMuteTicks = m_backend->introSkipEndTick();
+
     OplTunnelSender::instance().setSuppressed(false);
 
     m_title    = m_backend->title();
@@ -332,6 +375,7 @@ bool GybPlayer::loadFile(const QString& fileName)
     m_currentTick.store(0);
     m_sampleCounter.store(0.0f);
     m_position.store(0);
+    m_positionRemainder = 0.0;
     m_needsFadeIn.store(true);
     m_fadeCounter.store(0);
     memset(m_cachedVoiceInsts, 0, sizeof(m_cachedVoiceInsts));
@@ -375,6 +419,7 @@ void GybPlayer::stop()
     std::lock_guard<std::mutex> lock(m_playerMutex);
     m_playing.store(false);
     m_position.store(0);
+    m_positionRemainder = 0.0;
     m_currentTick.store(0);
     m_sampleCounter.store(0.0f);
     m_lpfLastL = 0.0f; m_lpfLastR = 0.0f;
@@ -426,6 +471,7 @@ void GybPlayer::setPosition(unsigned long positionMs)
     m_currentTick.store(ticks);
     m_sampleCounter.store((float)((double)m_sampleRate / (double)r));
     m_position.store(positionMs);
+    m_positionRemainder = 0.0;
     m_needsFadeIn.store(true);
     m_fadeCounter.store(0);
     // Clear the DSP low-pass filter state so its stale value doesn't leak
@@ -542,6 +588,8 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
         // per tick - see OplTunnelSender::setNowMs). Same as ImsPlayer.
         OplTunnelSender::instance().setNowMs(
             (uint32_t)(m_tunnelClockSamples * 1000.0 / (double)m_sampleRate));
+        // Hold the key-on bits down through the song's silent lead-in.
+        m_opl->setKeyMute(m_currentTick.load() < m_introMuteTicks);
         if (!m_backend->update()) {
             m_playing.store(false);
             QMetaObject::invokeMethod(this, "finished", Qt::QueuedConnection);
@@ -552,6 +600,7 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
         m_currentTick.fetch_add(1);
         ticked = true;
     }
+    m_opl->setKeyMute(false);
 
     m_opl->update(tmp, framesToRender);
 
@@ -609,7 +658,22 @@ void GybPlayer::renderAudio(float* output, unsigned int frameCount)
     m_sampleCounter.store(current);
     // Position is wall-clock derived from rendered audio samples — that's
     // independent of song tempo and stays in lockstep with the progress bar.
-    m_position.fetch_add((unsigned long)((double)framesToRender * 1000.0 / (double)m_sampleRate));
+    // Song position. Accumulate the fraction rather than truncating it: one
+    // buffer at the device's default period is a fraction under a whole
+    // millisecond, and dropping that fraction every callback cost about a tenth
+    // of the clock - SOVIRGIN.GYB, 2:43 by the load-time scan, reported 2:26
+    // when the audio stopped, so the progress bar froze short of the end while a
+    // seek (which stores the position directly) made it agree again. ImsPlayer
+    // has carried this remainder for a while; GYB and OKA never got it. The
+    // tempo factor matches Ims too: m_duration is measured once at load, so at
+    // 150% the position has to advance 1.5x real time to reach that same end.
+    m_positionRemainder += ((double)framesToRender * 1000.0 / (double)m_sampleRate)
+                         * ((double)(m_backend ? m_backend->userTempoScale() : 100) / 100.0);
+    if (m_positionRemainder >= 1.0) {
+        unsigned long msToAdd = (unsigned long)m_positionRemainder;
+        m_position.fetch_add(msToAdd);
+        m_positionRemainder -= (double)msToAdd;
+    }
 
     if (ticked) {
         for (int i = 0; i < 16; ++i) {

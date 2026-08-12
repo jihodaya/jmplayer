@@ -108,6 +108,19 @@ private:
     QString m_title;
     QString m_bankName;
     QString m_externalBankPath;
+
+    // The 28 OPL parameter bytes of each embedded instrument record - the song
+    // carries its own bank (see GybBackend::loadEmbeddedPatches).
+    static const int kEmbeddedParamLen = 28;
+    QList<QByteArray> m_instParams;
+    bool loadEmbeddedPatches();
+
+    // Volume / instrument / rhythm wrappers that follow NORE45's driver.
+    void SetChannelVolume(int voice, uint8_t volume);
+    void NoteInstrument(int voice, int slot, int instIdx);
+    void FixRhythmFrequency(int voice);
+    bool    m_voiceAdditive[18] = {false};
+    uint8_t m_voiceModKsltl[18] = {0};
     float   m_tickHz;
     unsigned long m_ticksPerQuarter;
     unsigned long m_currentTempo; // microseconds per quarter note

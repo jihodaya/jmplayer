@@ -88,6 +88,7 @@ private:
     std::atomic<bool> m_playing;
     unsigned int      m_sampleRate;
     std::atomic<unsigned long> m_position;
+    double m_positionRemainder = 0.0;  // sub-millisecond carry (audio thread)
     std::atomic<float>         m_sampleCounter;
     std::atomic<int>           m_volume;
     std::atomic<int>           m_dspLevel;
@@ -99,6 +100,11 @@ private:
     QString m_title;
     QString m_bankName;
     QString m_externalBankPath;
+
+    // Ticks of the silent lead-in, 0 when the song has none. The sequencer runs
+    // through them at the ordinary tempo with key-on suppressed, so the song
+    // begins at the same moment as GAYOBANG does and nothing is heard first.
+    unsigned long m_introMuteTicks = 0;
     QStringList m_instrumentNames;  // slot list with slot 0 stripped (IMS-style row layout)
     int m_basicTempo;
     int m_tickBeat;

@@ -54,6 +54,25 @@ public:
     int      basicTempo()  const { return m_basicTempo; }
     QStringList slotNames() const { return m_slotNames; }
 
+    // Tick at which the song's silent lead-in ends, or 0 when it has none.
+    //
+    // A global event of 1000 at tick 0 marks a lead-in that GAYOBANG prints on
+    // its score - "♩=1400" above the first few notes - but never sounds. It is
+    // not a tempo: taken as one (ten times the base) the notes were heard as a
+    // crushed flourish, and skipping the ticks outright started the song too
+    // early. The range keeps its ordinary timing and is played with the key-on
+    // bits held down, so the song proper begins exactly where the original does.
+    unsigned long introSkipEndTick() const;
+
+    // Ordinary tempo events sit near 100; the intro marker seen so far is 1000.
+    static const int kIntroScaleThreshold = 500;
+
+    // A bank the user registered with the BNK button. GYB stored this on the
+    // player and never handed it down, so the button did nothing for GYB songs;
+    // OkaBackend already had this pair.
+    void    setExternalBankPath(const QString& path) { m_externalBankPath = path; }
+    QString externalBankPath() const { return m_externalBankPath; }
+
     // User tempo/key controls
     void setUserTempoScale(int scale) { m_userTempoScale = scale; m_tickHz = tickHzAt(m_currentTick); }
     int  userTempoScale() const { return m_userTempoScale; }
@@ -121,7 +140,22 @@ private:
     // and let the Qt wrapper hide slot 0 from the channel monitor.
     QStringList m_slotNames;
     QList<int>  m_slotToInstIndex; // slot index → CcomposerBackend instrument index, -1 if missing
+
+    // The 28 OPL parameter bytes of each embedded instrument record - what the
+    // song actually sounds like, independent of any external bank.
+    static const int kEmbeddedParamLen = 28;
+    QList<QByteArray> m_instParams;
+    bool loadEmbeddedPatches();
+
+    // Volume/instrument wrappers that honour GAYOBANG's additive rule.
+    void SetChannelVolume(int voice, uint8_t volume);
+    void FixRhythmFrequency(int voice);
+    void NoteInstrument(int voice, int slot, int instIdx);
+
+    QString m_externalBankPath;
     int         m_voiceSlot[18];   // OPL voice → GYB slot index currently programmed
+    bool        m_voiceAdditive[18] = {false}; // patch uses additive connection
+    uint8_t     m_voiceModKsltl[18] = {0};     // its modulator KSL/TL, unscaled
     int         m_voiceAttack[18]; // per-voice note-onset level for the level meter
 
     QString m_title;

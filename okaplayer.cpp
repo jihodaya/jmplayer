@@ -14,6 +14,9 @@
 #include "jjomesynth.h"
 #include "opltunnelsender.h" // OPL register tunnel to the bare-metal jukebox
 
+// Rhythm-operator trim, 0.75 dB per step: 0 = off, 6 = -4.5 dB, 8 = -6 dB.
+static const int kDrumTLOffset = 6;
+
 class OkaPlayer::InterceptingOpl : public CNemuopl {
 public:
     struct ShadowVoice {
@@ -94,6 +97,15 @@ public:
     void write(int reg, int val) override {
         int bankOffset = (reg >= 0x100) ? 9 : 0;
         int baseReg    = reg & 0xFF;
+
+        // Same rhythm-operator trim as GybPlayer -
+        // see the note there. Measured against a real-chip capture, not derived
+        // from NORE45.
+        if (kDrumTLOffset && baseReg >= 0x50 && baseReg <= 0x55 && reg < 0x100) {
+            int tl = (val & 0x3F) + kDrumTLOffset;
+            if (tl > 63) tl = 63;
+            val = (val & 0xC0) | tl;
+        }
 
         // OPL3 모드 끄기(OPL2 복원) 방지 필터링
         if (reg == 0x105) {
@@ -308,13 +320,18 @@ bool OkaPlayer::loadFile(const QString& fileName)
             int channel = ev.status & 0x0F;
             int vel = ev.data2;
             if (vel > 0) {
-                if (channel < 11 && channel != 10) { // Limit to MAX_VOICES and exclude Johab lyrics
+                if (channel < 11) {          // 11 voices, see OkaBackend
                     OkaRollNote rn;
                     rn.tick = ev.absoluteTick;
                     rn.channel = channel;
                     rn.pitch = ev.data1;
                     m_rollNotes.append(rn);
-                } else if (channel == 10) {
+                }
+                // Channel 10 is the hi-hat, not a lyric marker (see
+                // OkaBackend::advanceOneTick). It is still collected here
+                // because it is the last-resort fallback when a file's
+                // trailing lyric sync block is missing or corrupt.
+                if (channel == 10) {
                     m_lyricMarkerTicks.append(ev.absoluteTick);
                 }
             }
@@ -324,6 +341,7 @@ bool OkaPlayer::loadFile(const QString& fileName)
     m_currentTick.store(0);
     m_sampleCounter.store(0.0f);
     m_position.store(0);
+    m_positionRemainder = 0.0;
     m_needsFadeIn.store(true);
     m_fadeCounter.store(0);
     memset(m_cachedVoiceInsts, 0, sizeof(m_cachedVoiceInsts));
@@ -369,6 +387,7 @@ void OkaPlayer::stop()
     std::lock_guard<std::mutex> lock(m_playerMutex);
     m_playing.store(false);
     m_position.store(0);
+    m_positionRemainder = 0.0;
     m_currentTick.store(0);
     m_sampleCounter.store(0.0f);
     m_lpfLastL = 0.0f; m_lpfLastR = 0.0f;
@@ -417,6 +436,7 @@ void OkaPlayer::setPosition(unsigned long positionMs)
     m_currentTick.store(ticks);
     m_sampleCounter.store((float)((double)m_sampleRate / (double)r));
     m_position.store(positionMs);
+    m_positionRemainder = 0.0;
     m_needsFadeIn.store(true);
     m_fadeCounter.store(0);
     // Clear the DSP low-pass filter state so its stale value doesn't leak
@@ -596,7 +616,22 @@ void OkaPlayer::renderAudio(float* output, unsigned int frameCount)
     }
 
     m_sampleCounter.store(current);
-    m_position.fetch_add((unsigned long)((double)framesToRender * 1000.0 / (double)m_sampleRate));
+    // Song position. Accumulate the fraction rather than truncating it: one
+    // buffer at the device's default period is a fraction under a whole
+    // millisecond, and dropping that fraction every callback cost about a tenth
+    // of the clock - SOVIRGIN.GYB, 2:43 by the load-time scan, reported 2:26
+    // when the audio stopped, so the progress bar froze short of the end while a
+    // seek (which stores the position directly) made it agree again. ImsPlayer
+    // has carried this remainder for a while; GYB and OKA never got it. The
+    // tempo factor matches Ims too: m_duration is measured once at load, so at
+    // 150% the position has to advance 1.5x real time to reach that same end.
+    m_positionRemainder += ((double)framesToRender * 1000.0 / (double)m_sampleRate)
+                         * ((double)(m_backend ? m_backend->userTempoScale() : 100) / 100.0);
+    if (m_positionRemainder >= 1.0) {
+        unsigned long msToAdd = (unsigned long)m_positionRemainder;
+        m_position.fetch_add(msToAdd);
+        m_positionRemainder -= (double)msToAdd;
+    }
 
     if (ticked) {
         for (int i = 0; i < 16; ++i) {

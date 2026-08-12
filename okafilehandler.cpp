@@ -128,6 +128,47 @@ QStringList OkaFileHandler::extractInstrumentNames(const QString& filePath)
     return slotNames;
 }
 
+// Same walk as extractInstrumentNames(), returning the parameters instead of
+// the names. Kept separate rather than merged so the name path - used by the
+// channel monitor on every song - stays exactly as it was.
+QList<QByteArray> OkaFileHandler::extractInstrumentParams(const QString& filePath)
+{
+    QList<QByteArray> params;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) return params;
+    QByteArray raw = file.readAll();
+    file.close();
+    const int fileSize = raw.size();
+    if (fileSize < 0x310) return params;
+
+    unsigned int midiSize = 0, lyricSize = 0;
+    unsigned short textSize = 0, val1b4 = 0, instSize = 0;
+    memcpy(&midiSize,  raw.constData() + 0x1CE, 4);
+    memcpy(&lyricSize, raw.constData() + 0x1AE, 4);
+    memcpy(&textSize,  raw.constData() + 0x1B2, 2);
+    memcpy(&val1b4,    raw.constData() + 0x1B4, 2);
+    memcpy(&instSize,  raw.constData() + 0x1D2, 2);
+
+    if (instSize == 0) return params;
+
+    const unsigned int instStart = 0x310 + midiSize + lyricSize + textSize + val1b4;
+    if (instStart + instSize > (unsigned int)fileSize) return params;
+
+    QByteArray instData(instSize, Qt::Uninitialized);
+    const unsigned char* src = reinterpret_cast<const unsigned char*>(raw.constData() + instStart);
+    for (int i = 0; i < instSize; ++i)
+        instData[i] = (char)(src[i] ^ OKA_XOR_KEY);
+
+    // 9 bytes of name, one byte whose meaning is unknown, then the 28 bytes
+    // AdPlug reads as a raw instrument.
+    const int recCount = instSize / OKA_INST_RECORD_LEN;
+    for (int i = 0; i < recCount; ++i)
+        params.append(instData.mid(i * OKA_INST_RECORD_LEN + 10, 28));
+
+    return params;
+}
+
 QStringList OkaFileHandler::extractLyrics(const QString& filePath)
 {
     QStringList lines;
