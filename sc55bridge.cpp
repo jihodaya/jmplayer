@@ -430,6 +430,19 @@ bool Sc55Bridge::Start()
             args << "--lcd-scale" << QString::number(scale, 'f', 3);
     }
 
+    // Nuked-SC55 makes its own sound; jmp's audio device is not involved in
+    // this mode, so jmp's buffer setting cannot help it. The emulator takes
+    // "-ab:<page_size>:[page_count]" for its SDL buffer, and its stock value is
+    // small enough that another program loading - a game grabbing the CPU - can
+    // starve it into noise. Off by default so the emulator keeps its own
+    // default; set Sc55/AudioBuffer (for example "2048:32") to enlarge it.
+    {
+        const QString ab = SettingsManager::instance()
+            .value("Sc55/AudioBuffer", QString()).toString().trimmed();
+        if (!ab.isEmpty())
+            args << QString("-ab:%1").arg(ab);
+    }
+
     m_pProcess->start(exe, args);
     if (!m_pProcess->waitForStarted(5000)) {
         m_error = LSTR(u8"Nuked-SC55을 실행하지 못했습니다.",

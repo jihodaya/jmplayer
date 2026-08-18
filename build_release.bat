@@ -21,7 +21,7 @@ set RELEASE_DIR=%SCRIPT_DIR%release
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player R2.5k.2
+echo JJoMe MIDI Player R2.6b
 echo License-Compliant Build Script
 echo ========================================
 echo.
@@ -112,12 +112,21 @@ echo.
 REM Prepare release folder
 mkdir "%RELEASE_DIR%"
 
-REM IMS\STAND.BNK is the DOS-original bank, byte-identical to the one shipped
-REM with GAYOBANG and nore. .GYB/.OKA files converted from .ROL carry instrument
-REM names with no parameters and are silent without it; see bnkfill.cpp. Kept
-REM next to STANDARD.BNK so the two banks are managed in one place.
-if exist "%SRC_DIR%\IMS\STAND.BNK" (
-    copy "%SRC_DIR%\IMS\STAND.BNK" "%RELEASE_DIR%\" > nul
+REM Three banks travel with the player, all managed from IMS\ .
+REM   GAYO.BNK     - GAYOBANG's own, 2,154. Read first for .GYB.
+REM   NORE.BNK     - NORE45's own, 6,009. Read first for .OKA.
+REM   STANDARD.BNK - the general OPL collection, 15,867, for .IMS/.ROL.
+REM                  Not part of the .GYB/.OKA chain: neither DOS
+REM                  program ever read it.
+REM The two DOS banks share all but one name, but 244 of the shared names hold
+REM different parameters, so which one a song is read against matters; see
+REM bnkfill.cpp. Files converted from .ROL carry instrument names with no
+REM parameters and are silent without a bank at all.
+if exist "%SRC_DIR%\IMS\GAYO.BNK" (
+    copy "%SRC_DIR%\IMS\GAYO.BNK" "%RELEASE_DIR%\" > nul
+)
+if exist "%SRC_DIR%\IMS\NORE.BNK" (
+    copy "%SRC_DIR%\IMS\NORE.BNK" "%RELEASE_DIR%\" > nul
 )
 
 if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
@@ -128,7 +137,7 @@ if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
 )
 
 echo [5/5] Creating directory structure for release...
-copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.5k.2.exe"
+copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.6b.exe"
 copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
 if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
 if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
@@ -158,7 +167,7 @@ echo.
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
 cd /d "%RELEASE_DIR%"
-windeployqt JMPlayer_R2.5k.2.exe --release --no-translations --no-opengl-sw
+windeployqt JMPlayer_R2.6b.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
@@ -175,11 +184,11 @@ echo BUILD COMPLETED SUCCESSFULLY!
 echo ========================================
 echo.
 echo Release folder: %RELEASE_DIR%\
-echo Executable: %RELEASE_DIR%\JMPlayer_R2.5k.2.exe
+echo Executable: %RELEASE_DIR%\JMPlayer_R2.6b.exe
 echo.
 
-if exist "%RELEASE_DIR%\JMPlayer_R2.5k.2.exe" (
-    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.5k.2.exe") do (
+if exist "%RELEASE_DIR%\JMPlayer_R2.6b.exe" (
+    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.6b.exe") do (
         echo Executable size: %%~zA bytes
     )
 )

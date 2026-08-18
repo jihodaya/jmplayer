@@ -25,7 +25,7 @@ set RELEASE_DIR=%SCRIPT_DIR%release_eng
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player R2.5k.2  (English UI)
+echo JJoMe MIDI Player R2.6b  (English UI)
 echo License-Compliant Build Script
 echo ========================================
 echo.
@@ -118,6 +118,22 @@ echo.
 REM Prepare release folder
 mkdir "%RELEASE_DIR%"
 
+REM Three banks travel with the player, all managed from IMS\ .
+REM   GAYO.BNK     - GAYOBANG's own, 2,154. Read first for .GYB.
+REM   NORE.BNK     - NORE45's own, 6,009. Read first for .OKA.
+REM   STANDARD.BNK - the general OPL collection, 15,867, for .IMS/.ROL.
+REM                  Not part of the .GYB/.OKA chain: neither DOS
+REM                  program ever read it.
+REM The two DOS banks share all but one name, but 244 of the shared names
+REM hold different parameters, so which one a song is read against matters;
+REM see bnkfill.cpp.
+if exist "%SRC_DIR%\IMS\GAYO.BNK" (
+    copy "%SRC_DIR%\IMS\GAYO.BNK" "%RELEASE_DIR%\" > nul
+)
+if exist "%SRC_DIR%\IMS\NORE.BNK" (
+    copy "%SRC_DIR%\IMS\NORE.BNK" "%RELEASE_DIR%\" > nul
+)
+
 if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
     echo [4/5] Copying standard bank file...
     copy "%SRC_DIR%\IMS\STANDARD.BNK" "%RELEASE_DIR%\" > nul
@@ -126,7 +142,7 @@ if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
 )
 
 echo [5/5] Creating directory structure for release...
-copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.5k.2_ENG.exe"
+copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.6b_ENG.exe"
 copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
 if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
 if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
@@ -153,7 +169,7 @@ echo.
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
 cd /d "%RELEASE_DIR%"
-windeployqt JMPlayer_R2.5k.2_ENG.exe --release --no-translations --no-opengl-sw
+windeployqt JMPlayer_R2.6b_ENG.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
@@ -170,11 +186,11 @@ echo BUILD COMPLETED SUCCESSFULLY!  (English UI)
 echo ========================================
 echo.
 echo Release folder: %RELEASE_DIR%\
-echo Executable: %RELEASE_DIR%\JMPlayer_R2.5k.2_ENG.exe
+echo Executable: %RELEASE_DIR%\JMPlayer_R2.6b_ENG.exe
 echo.
 
-if exist "%RELEASE_DIR%\JMPlayer_R2.5k.2_ENG.exe" (
-    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.5k.2_ENG.exe") do (
+if exist "%RELEASE_DIR%\JMPlayer_R2.6b_ENG.exe" (
+    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.6b_ENG.exe") do (
         echo Executable size: %%~zA bytes
     )
 )

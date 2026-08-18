@@ -107,6 +107,15 @@ public:
             val = (val & 0xC0) | tl;
         }
 
+        // Waveform is two bits on the OPL2 these drivers were written for.
+        // The record-level mask in the backends covers the song's own patches;
+        // this catches every other route to 0xE0..0xF5 as well, so an OPL3-only
+        // waveform can never be selected while OPL3 mode is on for the stereo
+        // bits alone.
+        if (baseReg >= 0xE0 && baseReg <= 0xF5) {
+            val &= 0x03;
+        }
+
         // OPL3 모드 끄기(OPL2 복원) 방지 필터링
         if (reg == 0x105) {
             val |= 0x01;
@@ -123,10 +132,18 @@ public:
                 // intercept for the full rationale.
                 OplTunnelSender::instance().queueWrite(
                     (uint16_t)(((getchip() & 1) << 8) | (reg & 0x1FF)), (uint8_t)val);
-                int panBit = JJoMeSynth::instance().getChannelPanBit(ch);
+                // Mode 10 does not use the pan map: the two chips are the
+                // stereo. Set the first one explicitly, because the map's
+                // letters are the other way round from the chip's bits -
+                // nukedopl.c takes 0x10 as cha and mixes cha into the LEFT
+                // output, while getChannelPanBit() returns 0x20 for 'L'.
+                const bool dualChip = JJoMeSynth::instance().getOplStereoMode() == 10;
+                int panBit = dualChip ? 0x20   // first chip -> right
+                                      : JJoMeSynth::instance().getChannelPanBit(ch);
                 val &= ~0x30;
                 val |= panBit;
                 CNemuopl::write(reg, val); // local chip only - jmp's own stereo
+                if (dualChip) mirrorSecondChip(reg, val);   // second chip -> left
                 return;
             }
         }
@@ -172,7 +189,10 @@ public:
             if (ch < 18) m_regB[ch] = val;
         }
 
+        if (reg < 0x100) m_shadow0[reg & 0xFF] = (uint8_t)val;
         tunnelChipWrite(reg, val);
+        if (JJoMeSynth::instance().getOplStereoMode() == 10)
+            mirrorSecondChip(reg, val);
 
         if (baseReg >= 0xB0 && baseReg <= 0xB8) {
             int ch = bankOffset + (baseReg - 0xB0);
@@ -214,6 +234,73 @@ public:
     // silenceAllVoices - fixes the "칭~" swell on resume, locally and over the
     // mt32-pi OPL tunnel). Clears key-on bit 5 of B0-B8 (both banks) and the
     // 0xBD drum key bits; goes through write() so the tunnel carries it too.
+    // GAYOBANG's "스테레오" / NORE45's equivalent, offered as mode [0].
+    //
+    // The Oksori card answers at 0x388 AND 0x38A - two OPL chips, one per
+    // speaker - and the setting is not a pan layout: FUN_255a_12e9 turns the
+    // second chip on, every operator register is mirrored to it, and
+    // FUN_255a_0ccb gives it the same note with the pitch bend raised 0x600,
+    // which is +18.75 cents at the 1-semitone range. Above sound-mode 3
+    // (서라운드 / 회전 2) the mirrored level is 9/10; plain 스테레오 is full.
+    // Rhythm is not mirrored - the gate there is `channel < 7 || !rhythmMode` -
+    // so the drums come from the first chip only, which is why the two sides
+    // do not sit at the same level.
+    //
+    // Measured against a capture of the real thing: L/R correlation 0.164
+    // against the recording's 0.023, and a channel imbalance of +4.8 dB
+    // against +5.1. A pan pattern cannot get there - the widest one managed
+    // 0.101 and none of them carry the detune that makes it sound thick.
+    uint8_t m_shadow0[256] = {0};
+
+    // Bring the second chip up to date from the shadow, for when the mode is
+    // switched while a song is already playing. Without it the chip has never
+    // seen the operator or frequency registers of the notes now sounding, and
+    // only whatever arrives next would reach it.
+    void rebuildSecondChip() {
+        for (int r = 0x20; r <= 0xF5; ++r) {
+            const int b = r & 0xFF;
+            const bool interesting =
+                (b >= 0x20 && b <= 0x35) || (b >= 0x40 && b <= 0x55) ||
+                (b >= 0x60 && b <= 0x75) || (b >= 0x80 && b <= 0x95) ||
+                (b >= 0xE0 && b <= 0xF5) || (b >= 0xC0 && b <= 0xC8);
+            if (interesting) mirrorSecondChip(r, m_shadow0[b]);
+        }
+        for (int ch = 0; ch < 9; ++ch) mirrorFreq(ch, m_drumMode ? 6 : 8);
+    }
+
+    void mirrorSecondChip(int reg, int val) {
+        if (reg >= 0x100) return;
+        const int b = reg & 0xFF;
+        const int lastCh = m_drumMode ? 6 : 8;
+        static const int kOp[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
+        auto chOfOp = [&](int op) {
+            for (int c = 0; c < 9; ++c) if (kOp[c] == op || kOp[c] + 3 == op) return c;
+            return -1;
+        };
+        if (b >= 0xA0 && b <= 0xA8) { mirrorFreq(b - 0xA0, lastCh); return; }
+        if (b >= 0xB0 && b <= 0xB8) { mirrorFreq(b - 0xB0, lastCh); return; }
+        if (b >= 0xC0 && b <= 0xC8) {
+            if (b - 0xC0 <= lastCh) CNemuopl::write(b | 0x100, (val & 0x0F) | 0x10);
+            return;
+        }
+        if ((b >= 0x20 && b <= 0x35) || (b >= 0x40 && b <= 0x55) ||
+            (b >= 0x60 && b <= 0x75) || (b >= 0x80 && b <= 0x95) ||
+            (b >= 0xE0 && b <= 0xF5)) {
+            const int c = chOfOp(b & 0x1F);
+            if (c >= 0 && c <= lastCh) CNemuopl::write(b | 0x100, val);
+        }
+    }
+
+    void mirrorFreq(int ch, int lastCh) {
+        if (ch < 0 || ch > lastCh) return;
+        int fnum  = ((m_regB[ch] & 3) << 8) | (m_regA[ch] & 0xFF);
+        int block = (m_regB[ch] >> 2) & 7;
+        fnum = (int)(fnum * 1.0108920f + 0.5f);          // +0x600 of bend
+        if (fnum > 0x3FF) { if (block < 7) { fnum >>= 1; ++block; } else fnum = 0x3FF; }
+        CNemuopl::write(0x1A0 + ch, fnum & 0xFF);
+        CNemuopl::write(0x1B0 + ch, (m_regB[ch] & 0x20) | (block << 2) | ((fnum >> 8) & 3));
+    }
+
     void silenceAllVoices() {
         for (int ch = 0; ch < 18; ++ch) {
             const int bank = (ch >= 9) ? 0x100 : 0;
@@ -772,9 +859,17 @@ void OkaPlayer::forceUpdateOplStereo()
         for (int ch = 0; ch < 18; ++ch) {
             int reg = ((ch >= 9) ? 0x100 : 0) + 0xC0 + (ch % 9);
             int origVal = m_opl->originalPanReg[ch];
-            int panBit = JJoMeSynth::instance().getChannelPanBit(ch);
+            // Mode 10 places the two chips itself - the map's letters are the
+            // mirror of the chip's bits, so going through getChannelPanBit()
+            // here put chip 0 on the LEFT while the write path had put it on
+            // the right, and switching mode mid-song stacked both chips on one
+            // side (the left went muffled until the song was restarted).
+            const bool dualChip = JJoMeSynth::instance().getOplStereoMode() == 10;
+            int panBit = dualChip ? 0x20
+                                  : JJoMeSynth::instance().getChannelPanBit(ch);
             int finalVal = (origVal & ~0x30) | panBit;
             m_opl->CNemuopl::write(reg, finalVal);
         }
+        if (JJoMeSynth::instance().getOplStereoMode() == 10) m_opl->rebuildSecondChip();
     }
 }

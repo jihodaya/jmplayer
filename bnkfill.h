@@ -25,13 +25,32 @@
 //
 // Returns the number of slots filled. `params` is modified in place.
 // Load a .BNK as a name -> 28-parameter-byte map. Empty if none was found.
+// Which program's bank a song should be read against first. GAYOBANG and
+// NORE45 shipped different banks: 2,154 instruments against 6,005, and although
+// the larger one carries all but one of the smaller one's names, 244 of the
+// shared names hold different parameters. A .GYB read against NORE45's bank
+// therefore plays 244 possible instruments in the wrong voice, and vice versa.
+enum class BankOrder { Gayobang, Nore45 };
+
+// Load a .BNK as a name -> 28-parameter-byte map. Empty if none was found.
 QHash<QString, QByteArray> loadInstrumentBank(const QString& songPath, int paramLen,
                                               QString* chosenPath = nullptr);
+
+// The six patches the DOS players carry inside themselves, at DS:0x120a in
+// GAYOBANG.EXE and DS:0x5F3 in NORE45.EXE: index 0 is the melodic default and
+// 1..5 the rhythm kit for channels 6..10. A record left empty falls back to one
+// of these - `FUN_255a_016b(ch, idx * 0x1c + 0x120a)` with
+// `idx = (!rhythm || ch < 6) ? 0 : ch - 5` - which is the last tier, after the
+// song's own parameters and a bank lookup by name. Verified against the bytes
+// extracted from GAYOBANG.EXE.
+const QByteArray& builtinDefaultInstrument(int index);
 
 int fillEmptyInstrumentSlots(const QStringList& slotNames,
                              QList<QByteArray>& params,
                              const QString& songPath,
                              int paramLen,
-                             const char* logTag);
+                             const char* logTag,
+                             BankOrder order,
+                             const QString& externalBank = QString());
 
 #endif // BNKFILL_H

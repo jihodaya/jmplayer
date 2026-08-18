@@ -146,6 +146,8 @@ private:
     static const int kEmbeddedParamLen = 28;
     QList<QByteArray> m_instParams;
     bool loadEmbeddedPatches();
+    int  builtinInstIndex(int voice);
+    int  m_builtinInst[6] = { -1, -1, -1, -1, -1, -1 };
 
     // Volume/instrument wrappers that honour GAYOBANG's additive rule.
     void SetChannelVolume(int voice, uint8_t volume);

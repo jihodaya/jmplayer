@@ -114,6 +114,8 @@ private:
     static const int kEmbeddedParamLen = 28;
     QList<QByteArray> m_instParams;
     bool loadEmbeddedPatches();
+    int  builtinInstIndex(int voice);
+    int  m_builtinInst[6] = { -1, -1, -1, -1, -1, -1 };
 
     // Volume / instrument / rhythm wrappers that follow NORE45's driver.
     void SetChannelVolume(int voice, uint8_t volume);

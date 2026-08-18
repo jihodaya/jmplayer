@@ -13,7 +13,7 @@ OplStereoDialog::OplStereoDialog(int currentMode, QWidget* parent)
     setupUi();
     
     // Select current mode in list (Mode 1 to 9 mapped to row 0 to 8)
-    if (currentMode >= 1 && currentMode <= 9) {
+    if (currentMode >= 1 && currentMode <= 10) {
         m_listWidget->setCurrentRow(currentMode - 1);
     }
     
@@ -26,7 +26,7 @@ OplStereoDialog::~OplStereoDialog() {
 
 void OplStereoDialog::setupUi() {
     setWindowTitle("OPL3 Playback Setup");
-    setFixedSize(540, 380);
+    setFixedSize(560, 410);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
     // Apply Application Dark Style Sheet
@@ -77,16 +77,27 @@ void OplStereoDialog::setupUi() {
         QString text;
     };
 
+    // The bracketed patterns here are written from the LISTENER's side - the
+    // letter says which speaker that channel comes out of. They are deliberately
+    // the mirror of the strings in JJoMeSynth::setOplStereoMode(), because that
+    // table's letters are the mirror of the chip's own bits: nukedopl.c takes
+    // 0x10 as `cha` and mixes `cha` into the LEFT output, while the table
+    // returns 0x20 for 'L'. All three implementations - here, the jukebox and
+    // the mt32-pi fork - share that inverted convention, so they agree with each
+    // other and only the printed letters were ever wrong. Swapping the bits
+    // instead would mirror every existing user's stereo image and would have to
+    // land in all three at once; only this display was corrected (2026-08-18).
     QList<ModeItem> items = {
         {1, LSTR("[1] 기본 연주 모드                [MMMMMMMMMMM]", "[1] Basic (Mono) Mode            [MMMMMMMMMMM]")},
-        {2, "[2] Stereo/Mono 1            [MMRRLLMMMMR]"},
-        {3, "[3] Stereo/Mono 2            [LLLRRRMMMMR]"},
-        {4, "[4] Stereo/Mono 3            [LRLRLRMMMMR]"},
-        {5, "[5] Stereo/Mono 4            [RLRLRLMMMMR]"},
-        {6, "[6] Stereo/Mono 5            [LLLLRRRRMMR]"},
-        {7, "[7] Stereo/Mono 6            [RRRRLLLLMMR]"},
-        {8, "[8] Stereo/Mono 7            [RRRLLLRRRLR]"},
-        {9, "[9] Stereo/Mono 8            [LLRRLLRRLLR]"}
+        {2, "[2] Stereo/Mono 1            [MMLLRRMMMML]"},
+        {3, "[3] Stereo/Mono 2            [RRRLLLMMMML]"},
+        {4, "[4] Stereo/Mono 3            [RLRLRLMMMML]"},
+        {5, "[5] Stereo/Mono 4            [LRLRLRMMMML]"},
+        {6, "[6] Stereo/Mono 5            [RRRRLLLLMML]"},
+        {7, "[7] Stereo/Mono 6            [LLLLRRRRMML]"},
+        {8, "[8] Stereo/Mono 7            [LLLRRRLLLRL]"},
+        {9, "[9] Stereo/Mono 8            [RRLLRRLLRRL]"},
+        {10, "[0] OKSORI Format Dual-Chip      [L/R detuned]"}
     };
 
     for (const auto& it : items) {
@@ -96,8 +107,9 @@ void OplStereoDialog::setupUi() {
         QLabel* label = new QLabel(this);
         // Stylize bracketed numbers in red for DOS feeling
         QString stylizedText = it.text;
-        stylizedText.replace(QString("[%1]").arg(it.mode), 
-            QString("[<font color='#ff5555'><b>%1</b></font>]").arg(it.mode));
+        const int shown = (it.mode == 10) ? 0 : it.mode;   // 10 is offered as [0]
+        stylizedText.replace(QString("[%1]").arg(shown),
+            QString("[<font color='#ff5555'><b>%1</b></font>]").arg(shown));
         label->setText(stylizedText);
         label->setStyleSheet("background-color: transparent; color: #ffffff; padding-left: 5px;");
 
@@ -107,7 +119,7 @@ void OplStereoDialog::setupUi() {
 
     // Help/Guide label
     QLabel* guideLabel = new QLabel(this);
-    guideLabel->setText("[1-9] Select Mode  [Enter] Confirm  [Esc] Cancel");
+    guideLabel->setText("[1-9,0] Select Mode  [Enter] Confirm  [Esc] Cancel");
     guideLabel->setAlignment(Qt::AlignCenter);
     guideLabel->setStyleSheet("color: #0078d4; font-weight: bold; margin-top: 5px;");
     layout->addWidget(guideLabel);
@@ -124,7 +136,9 @@ void OplStereoDialog::setupUi() {
 }
 
 void OplStereoDialog::selectModeAndAccept(int mode) {
-    if (mode >= 1 && mode <= 9) {
+    // 10 is the Oksori layout, offered as [0]. This gate said 9 and silently
+    // dropped it - every other range in the path had been widened but this one.
+    if (mode >= 1 && mode <= 10) {
         m_selectedMode = mode;
         accept();
     }
@@ -137,6 +151,7 @@ void OplStereoDialog::keyPressEvent(QKeyEvent* event) {
         selectModeAndAccept(key - Qt::Key_1 + 1);
         return;
     }
+    if (key == Qt::Key_0) { selectModeAndAccept(10); return; }
     QDialog::keyPressEvent(event);
 }
 
@@ -149,6 +164,7 @@ bool OplStereoDialog::eventFilter(QObject* obj, QEvent* event) {
             selectModeAndAccept(key - Qt::Key_1 + 1);
             return true;
         }
+        if (key == Qt::Key_0) { selectModeAndAccept(10); return true; }
     }
     return QDialog::eventFilter(obj, event);
 }

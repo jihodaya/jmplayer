@@ -1964,7 +1964,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.5k.2";
+    QString title = "🎵 JJoMe MIDI Player v2.6b";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -2378,7 +2378,7 @@ void MainWindow::showHelpDialog()
         "<tr><td><b>F10</b></td><td>Key transpose +1 semitone (max +6, all formats)</td></tr>"
         "<tr><td><b>F11</b></td><td>Reset tempo &amp; key to the original speed/pitch</td></tr>"
         "<tr><td><b>F6</b></td><td>Sound-module reset settings (reset the device on each new song)</td></tr>"
-        "<tr><td><b>F12</b></td><td>Open the OPL-like stereo &amp; performance mode settings (1-9)</td></tr>"
+        "<tr><td><b>F12</b></td><td>Open the OPL-like stereo &amp; performance mode settings (1-9, 0)</td></tr>"
         "</table>"
         "<br/>"
         "<b>[Supported music file extensions]</b><br/>"

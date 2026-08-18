@@ -11,6 +11,7 @@
 #include <QDebug>
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 
 CPlayer* GybBackend::factory(Copl* opl)
 {
@@ -48,7 +49,6 @@ int GybBackend::globalTempoScale(uint64_t tick) const
     int lastVal = 100;
     for (const auto& ee : m_globalEvents) {
         if ((uint64_t)ee.tick > tick) break;
-        if (ee.value >= kIntroScaleThreshold) continue;   // marker, not a tempo
         lastVal = ee.value;
     }
     if (lastVal < 1) lastVal = 100;
@@ -57,17 +57,14 @@ int GybBackend::globalTempoScale(uint64_t tick) const
 
 unsigned long GybBackend::introSkipEndTick() const
 {
-    // Only an event sitting at tick 0 marks an intro; a large value later in a
-    // song is a genuine tempo surge and must be played.
-    if (m_globalEvents.isEmpty()) return 0;
-    if (m_globalEvents.first().tick != 0) return 0;
-    if (m_globalEvents.first().value < kIntroScaleThreshold) return 0;
-
-    for (const auto& ee : m_globalEvents) {
-        if (ee.value < kIntroScaleThreshold)
-            return (unsigned long)ee.tick;
-    }
-    return 0;   // never returns to a normal tempo - play it rather than mute all
+    // No artificial mute any more. A song whose first global event is 1000 -
+    // eight of the 27 in the library, always at tick 0 and never anywhere else -
+    // really does play its lead-in at 1000% of the base tempo, which is what
+    // GAYOBANG prints on the score as "♩=1400". It is inaudible because every
+    // channel also carries a volume event of 0 at tick 0, and processChunk()
+    // now honours that (see the guard there). Muting the range instead made the
+    // song start about 1.5 s late.
+    return 0;
 }
 
 float GybBackend::tickHzAt(uint64_t tick) const
@@ -211,6 +208,21 @@ void GybBackend::NoteInstrument(int voice, int slot, int instIdx)
     }
 }
 
+
+// The patch a channel starts on, the way FUN_255a_101b sets every channel up
+// before a song plays: the melodic default for 0..5 and the rhythm kit for
+// 6..10. Returns an instrument index usable with SetInstrument(), or -1.
+int GybBackend::builtinInstIndex(int voice)
+{
+    const int which = (m_rhythmMode && voice >= 6 && voice <= 10) ? voice - 5 : 0;
+    if (m_builtinInst[which] < 0) {
+        QByteArray p = builtinDefaultInstrument(which);
+        m_builtinInst[which] = load_instrument_data(
+            reinterpret_cast<uint8_t*>(p.data()), kEmbeddedParamLen);
+    }
+    return m_builtinInst[which];
+}
+
 bool GybBackend::loadEmbeddedPatches()
 {
     if (m_slotNames.isEmpty() || m_instParams.isEmpty())
@@ -220,6 +232,51 @@ bool GybBackend::loadEmbeddedPatches()
     int loaded = 0;
     for (const QByteArray& params : m_instParams) {
         if (params.size() < kEmbeddedParamLen) {
+            m_slotToInstIndex.append(-1);
+            continue;
+        }
+        bool allZero = true;
+        for (int k = 0; k < params.size(); ++k) if (params[k]) { allZero = false; break; }
+        if (allZero) {
+            // An empty record - flag bit 0 clear at record offset 9 - means the
+            // song names an instrument it does not carry. resolveBnkPatches()
+            // has already had its chance to fill it from a bank by name, which
+            // is what the original does at load time (GAYOBANG's
+            // FUN_28a1_0155 binary-searches the bank and, on a hit, copies 28
+            // bytes into the record and sets the flag). What is left here is a
+            // name no bank has.
+            //
+            // -1 means "do not load anything": the voice keeps whatever patch
+            // it last held, initially the built-in from channel init.
+            //
+            // This deliberately does NOT match what the original's code says.
+            // GAYOBANG loads built-in patch 0 (FUN_255a_016b(ch, 0 * 0x1c +
+            // 0x120a)) for a melodic channel whose record is empty, and we ship
+            // those six patches byte-identical. But measured against a real
+            // GAYOBANG capture of THDRFOS1.GYB, whose slot 2 "bassbel3" is
+            // empty and is in no bank shipped with the DOS program, the
+            // built-in is the worst of every candidate tried and this is the
+            // best:
+            //
+            //   band profile distance from the capture, 160 Hz - 5.1 kHz
+            //     keep previous   2.59 dB      <- this
+            //     built-in        5.24 dB      <- what the code says
+            //     silent          4.68 dB
+            //     bank neighbours 3.47 dB      (BASSBEL2 / BASSBELL; the
+            //                                   original returns -1 on a miss,
+            //                                   so it never picks these anyway)
+            //
+            // The built-in runs 8.4 dB hot at 2.5-5 kHz, which is audible and
+            // which the owner also heard. Everything checkable has been
+            // checked: the record really is 28 zero bytes, the DOS install's
+            // STAND.BNK really has no BASSBEL3, the built-in table really is
+            // six patches at 0x120a and our copy is byte-identical, and the
+            // search really has no nearest-match fallback. The gap is not
+            // explained. Measurement has overturned code reasoning twice
+            // before in this port (the 0xC0 source and the bank-name lookup),
+            // so it wins again here - but this is the one place where the port
+            // knowingly differs from the original's listing, and a second
+            // real-chip capture of a song with an empty record should settle it.
             m_slotToInstIndex.append(-1);
             continue;
         }
@@ -500,7 +557,8 @@ bool GybBackend::load(const std::string& filename, const CFileProvider& fp)
     // instruments across 88% of songs. Only records the file leaves empty -
     // .ROL conversions, 32 of 334 songs - are filled from a bank.
     fillEmptyInstrumentSlots(m_slotNames, m_instParams, qf,
-                             kEmbeddedParamLen, "[GybBackend]");
+                             kEmbeddedParamLen, "[GybBackend]", BankOrder::Gayobang,
+                             m_externalBankPath);
 
     if (!loadEmbeddedPatches()) {
         if (!resolveBnkPatches(fp, filename)) {
@@ -558,10 +616,10 @@ void GybBackend::rewind(int subsong)
         int prog = 0;
         if (!t.progEvents.isEmpty()) prog = t.progEvents.front().value;
         t.program = prog;
-        if (prog >= 0 && prog < m_slotToInstIndex.size()) {
-            int instIdx = m_slotToInstIndex[prog];
-            if (instIdx >= 0) NoteInstrument(t.oplVoice, prog, instIdx);
-        }
+        int instIdx = (prog >= 0 && prog < m_slotToInstIndex.size())
+                    ? m_slotToInstIndex[prog] : -1;
+        if (instIdx < 0) instIdx = builtinInstIndex(t.oplVoice);   // channel's initial state
+        if (instIdx >= 0) NoteInstrument(t.oplVoice, prog, instIdx);
         if (t.oplVoice >= 0 && t.oplVoice < 18) m_voiceSlot[t.oplVoice] = prog;
         SetChannelVolume(t.oplVoice, t.volume);
         ChangePitch(t.oplVoice, t.pitchBend);
@@ -654,6 +712,16 @@ int GybBackend::processChunk(TrackState& t, uint8_t cmd, uint8_t dur)
         // pass the raw cmd value with the song's key transpose subtracted —
         // mirroring GAYOBANG's `note = cmd - hdr[0x2E] + 60` (the +60 is done
         // inside AdPlug) plus user transpose.
+        // A channel sitting at volume 0 must not sound. GetKSLTL() already
+        // drives it to TL 63, which is -47 dB rather than silence, and the
+        // attack transient of a note started there is still faintly audible.
+        // SOVIRGIN's lead-in is written this way: every channel carries a
+        // volume event of 0 at tick 0 and its real level at tick 32.
+        if (t.volume == 0) {
+            if (t.activeNote >= 0) { NoteOff(t.oplVoice); t.activeNote = -1; }
+            return (int)dur;
+        }
+
         int note = (int)cmd + m_keyTranspose + m_userKeyTranspose;
         if (note < 0) note = 0;
         if (note > 0x7F) note = 0x7F;

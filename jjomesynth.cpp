@@ -6,6 +6,7 @@
 #include "imsplayer.h"
 #include "gybplayer.h"
 #include "okaplayer.h"
+#include "settingsmanager.h"
 #include "opltunnelsender.h"
 
 #include <cstring>
@@ -117,6 +118,24 @@ bool JJoMeSynth::initialize(const QString& soundFontPath) {
     deviceConfig.sampleRate        = 49716;
     deviceConfig.dataCallback      = audio_data_callback;
     deviceConfig.pUserData         = this;
+
+    // Buffer depth. miniaudio's default period is about 10 ms, which is fine
+    // until another program takes the CPU for longer than that - a game
+    // loading, a virus scanner - and the callback misses its deadline, which
+    // comes out as a click or a burst of noise rather than a pause. Asking for
+    // a longer period costs latency nobody here can hear (the OPL tunnel is
+    // clocked by its own sample counter, not by this callback) and buys
+    // proportionally more slack. Settable because the right value depends on
+    // the machine: Audio/BufferMs, 0 restores miniaudio's default.
+    {
+        int bufMs = SettingsManager::instance().value("Audio/BufferMs", 40).toInt();
+        if (bufMs < 0)   bufMs = 0;
+        if (bufMs > 500) bufMs = 500;
+        if (bufMs > 0) {
+            deviceConfig.periodSizeInMilliseconds = (ma_uint32) bufMs;
+            deviceConfig.periods = 3;
+        }
+    }
 
     m_device = new ma_device;
     if (ma_device_init(m_context, &deviceConfig, m_device) != MA_SUCCESS) {
@@ -495,16 +514,24 @@ void JJoMeSynth::flushRemainingPcm() {
 }
 
 void JJoMeSynth::setOplStereoMode(int mode) {
-    if (mode < 1 || mode > 9) {
+    if (mode < 1 || mode > 10) {
         mode = 1;
     }
     m_oplStereoMode.store(mode, std::memory_order_release);
 
     // OPL tunnel (2026-07-16): the receiver (mt32-pi fork) applies its OWN pan
     // policy to the ORIGINAL 0xC0 values jmp ships - tell it which of jmp's
-    // 9 virtual-stereo patterns to use so the Pi mix follows this setting.
+    // virtual-stereo patterns to use so the Pi mix follows this setting.
     OplTunnelSender::instance().setStereoMode(mode);
 
+    // 'L' -> 0x20 and 'R' -> 0x10 is the mirror of the chip's own bits
+    // (nukedopl.c: 0x10 is `cha`, and `cha` is mixed into the LEFT output), so a
+    // channel marked 'L' here is heard on the RIGHT. The jukebox and the mt32-pi
+    // fork carry the same inversion, which is why every device agrees and the
+    // only thing that was ever wrong is the printed letter - OplStereoDialog
+    // therefore shows these patterns mirrored. Do not "fix" the bits without
+    // changing all three together: it buys nothing audible and flips the stereo
+    // image of every existing setting.
     // 1~9번에 대응하는 Panning 맵 정의
     static const char* MAPS[] = {
         "", // 인덱스 맞추기용 빈칸
@@ -516,7 +543,13 @@ void JJoMeSynth::setOplStereoMode(int mode) {
         "LLLLRRRRMMR", // 6
         "RRRRLLLLMMR", // 7
         "RRRLLLRRRLR", // 8
-        "LLRRLLRRLLR"  // 9
+        "LLRRLLRRLLR", // 9
+        // 10, shown as [0]: GAYOBANG's own "스테레오". Not a pan pattern at
+        // all - on the Oksori card ports 0x388 and 0x38A are two OPL chips,
+        // one per speaker, and the setting plays the song on both with the
+        // second detuned. This entry only places the first chip; the second is
+        // added by the players' bank-1 mirror (see InterceptingOpl).
+        "RRRRRRRRRRR"  // 10 - unused: the players place both chips themselves
     };
 
     const char* map = MAPS[mode];

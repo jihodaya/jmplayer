@@ -320,6 +320,21 @@ void OkaBackend::NoteInstrument(int voice, int slot, int instIdx)
     }
 }
 
+
+// The patch a channel starts on, the way FUN_255a_101b sets every channel up
+// before a song plays: the melodic default for 0..5 and the rhythm kit for
+// 6..10. Returns an instrument index usable with SetInstrument(), or -1.
+int OkaBackend::builtinInstIndex(int voice)
+{
+    const int which = (voice >= 6 && voice <= 10) ? voice - 5 : 0;
+    if (m_builtinInst[which] < 0) {
+        QByteArray p = builtinDefaultInstrument(which);
+        m_builtinInst[which] = load_instrument_data(
+            reinterpret_cast<uint8_t*>(p.data()), kEmbeddedParamLen);
+    }
+    return m_builtinInst[which];
+}
+
 bool OkaBackend::loadEmbeddedPatches()
 {
     if (m_slotNames.isEmpty() || m_instParams.isEmpty())
@@ -332,6 +347,13 @@ bool OkaBackend::loadEmbeddedPatches()
             m_slotToInstIndex.append(-1);
             continue;
         }
+        bool allZero = true;
+        for (int k = 0; k < params.size(); ++k) if (params[k]) { allZero = false; break; }
+        // Empty record: the voice keeps its previous patch. NORE45 shares
+        // GAYOBANG's driver and its FUN_1bd4_0142 loads a built-in instead;
+        // see the long note in GybBackend::loadEmbeddedPatches() for why the
+        // measurement went the other way and what would settle it.
+        if (allZero) { m_slotToInstIndex.append(-1); continue; }
         // Waveform is two bits in the original loader; see GybBackend.
         QByteArray p2 = params;
         p2[26] = (char)(p2[26] & 3);
@@ -402,7 +424,8 @@ bool OkaBackend::load(const std::string& filename)
     // so we deliberately do not follow it here. A file with no usable table
     // falls through to AdPlug's default instrument rather than to a bank.
     fillEmptyInstrumentSlots(m_slotNames, m_instParams, qf,
-                             kEmbeddedParamLen, "[OkaBackend]");
+                             kEmbeddedParamLen, "[OkaBackend]", BankOrder::Nore45,
+                             m_externalBankPath);
     if (loadEmbeddedPatches()) {
         std::cout << "   [OkaBackend] using the song's embedded instruments." << std::endl << std::flush;
     } else {
@@ -446,6 +469,18 @@ void OkaBackend::rewind(int subsong)
     for (int i = 0; i < 11; ++i) {
         SetChannelVolume(i, 100);
         ChangePitch(i, 0x2000); // 8192 centered
+    }
+
+    // Every channel starts on the player's own built-in patch, the way
+    // FUN_19aa's reset does, so a song whose first program change points at an
+    // empty record still has something to sound with. From then on such a
+    // change loads nothing and the channel keeps what it has - see bnkfill.cpp.
+    for (int i = 0; i < 11; ++i) {
+        const int prog = m_initialProgram[i];
+        int instIdx = (prog >= 0 && prog < m_slotToInstIndex.size())
+                    ? m_slotToInstIndex[prog] : -1;
+        if (instIdx < 0) instIdx = builtinInstIndex(i);
+        if (instIdx >= 0) NoteInstrument(i, prog, instIdx);
     }
 }
 
