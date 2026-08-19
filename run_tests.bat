@@ -3,12 +3,13 @@ REM ========================================
 REM CORPUS TESTS - development only, never shipped
 REM ========================================
 REM
-REM Builds the three test tools into build_tests\ and runs them. Nothing here
+REM Builds the four test tools into build_tests\ and runs them. Nothing here
 REM touches build\, release\ or the player: they are separate executables behind
 REM -DBUILD_TESTS=ON, which build_release.bat never passes.
 REM
 REM   inputs    rubbish into every value that comes from outside the program
 REM   loadall   opens every song in the library through jmp's own loaders
+REM   midiall   MidiPlayer's parse, tempo, sound-mode verdict and lyric decoding
 REM   render    renders a chosen set through the real players and hashes the audio
 REM
 REM They run cheapest-first, so a broken build is reported in seconds rather than
@@ -39,6 +40,13 @@ set "PATH=%QT_DIR%\bin;%MINGW_DIR%\bin;%PATH%"
 set "BASE_LOAD=tests\baseline-loadall.txt"
 set "BASE_RENDER=tests\baseline-render.txt"
 set "SONGS=tests\songs.txt"
+set "BASE_MIDI=tests\baseline-midiall.txt"
+set "BASE_MIDI_MID=tests\baseline-midiall-mid.txt"
+
+REM 116,000 .mid would take half an hour; every 20th takes a minute and has
+REM been enough so far. The stride is recorded in the baseline's first line, so
+REM a run with a different one is refused rather than compared wrongly.
+if "%MID_STRIDE%"=="" set "MID_STRIDE=20"
 
 set "REBASE=0"
 set "QUICK=0"
@@ -58,7 +66,7 @@ if "%QUICK%"=="1" echo   mode     : quick ^(skipping the library walk^)
 if "%REBASE%"=="1" echo   mode     : recording new baselines
 echo.
 
-echo [1/4] Configuring...
+echo [1/5] Configuring...
 cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON ^
       -DCMAKE_C_COMPILER="%MINGW_DIR_FS%/bin/gcc.exe" ^
       -DCMAKE_CXX_COMPILER="%MINGW_DIR_FS%/bin/g++.exe" ^
@@ -69,8 +77,8 @@ if errorlevel 1 (
     goto :fail
 )
 
-echo [2/4] Building the tools...
-cmake --build build_tests --target inputs loadall render -j 4 > build_tests_build.log 2>&1
+echo [2/5] Building the tools...
+cmake --build build_tests --target inputs loadall midiall render -j 4 > build_tests_build.log 2>&1
 if errorlevel 1 (
     echo ERROR: build failed - see build_tests_build.log
     goto :fail
@@ -80,7 +88,7 @@ set "TOTAL=0"
 
 echo.
 echo ----------------------------------------
-echo [3/4] inputs   - external values
+echo [3/5] inputs   - external values
 echo ----------------------------------------
 build_tests\inputs.exe
 if errorlevel 1 set /a TOTAL+=1
@@ -100,10 +108,30 @@ if not exist "%LIBRARY%" (
     if errorlevel 1 set /a TOTAL+=1
 )
 
+echo.
+echo ----------------------------------------
+echo [4/5] midiall  - MidiPlayer's parsing
+echo ----------------------------------------
+if "%REBASE%"=="1" (
+    if exist "%BASE_MIDI%"     move /y "%BASE_MIDI%"     "%BASE_MIDI%.prev" >nul
+    if exist "%BASE_MIDI_MID%" move /y "%BASE_MIDI_MID%" "%BASE_MIDI_MID%.prev" >nul
+)
+if not exist "%LIBRARY%" (
+    echo   SKIPPED: library folder not found
+) else (
+    echo   containers ^(.nob .okm .okw^) - all of them
+    build_tests\midiall.exe "%LIBRARY%" --formats nob,okm,okw --baseline "%BASE_MIDI%" --quiet
+    if errorlevel 1 set /a TOTAL+=1
+    echo.
+    echo   .mid - every %MID_STRIDE%th file
+    build_tests\midiall.exe "%LIBRARY%" --formats mid,midi --stride %MID_STRIDE% --baseline "%BASE_MIDI_MID%" --quiet
+    if errorlevel 1 set /a TOTAL+=1
+)
+
 :render
 echo.
 echo ----------------------------------------
-echo [4/4] render   - audio of the chosen songs
+echo [5/5] render   - audio of the chosen songs
 echo ----------------------------------------
 if "%REBASE%"=="1" if exist "%BASE_RENDER%" move /y "%BASE_RENDER%" "%BASE_RENDER%.prev" >nul
 if not exist "%SONGS%" (

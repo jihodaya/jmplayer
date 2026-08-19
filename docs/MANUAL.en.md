@@ -1,4 +1,4 @@
-# JMPlayer R2.7c — User Manual
+# JMPlayer R2.7d — User Manual
 
 *[한국어 매뉴얼은 여기 → MANUAL.ko.md](MANUAL.ko.md)*
 

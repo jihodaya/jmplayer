@@ -1688,8 +1688,28 @@ bool MainWindow::isOkaOplFile(const QString& filePath) const
 // keeps the two from fighting.
 QString MainWindow::patchTargetPath()
 {
-    if (!currentFile.isEmpty() && (isPlaying || !plHasCurrent()))
+    // Follow whatever the transport is showing, which is not the same as
+    // "isPlaying".
+    //
+    // A song stays loaded and on screen while it is **paused**, and pausing sets
+    // isPlaying to false. The first version of this asked only isPlaying, so
+    // pausing quietly moved the MIDI button's target from the song being heard
+    // to whatever row happened to be highlighted in the playlist - and since
+    // onFileSelected() lets the selection roam freely during playback, that was
+    // usually a different song. Toggling then set the mode on the wrong file and
+    // left the loaded one untouched, and the next press of play started the
+    // highlighted song instead. Reported 2026-08-19 as "the previous song plays
+    // when switching between FM and MIDI".
+    //
+    // m_pausedByUser is the flag that separates a pause from a stop; stop()
+    // clears it and any (re)start clears it, so "isPlaying || m_pausedByUser"
+    // is exactly "a song is active".
+    if (!currentFile.isEmpty() && (isPlaying || m_pausedByUser))
         return currentFile;
+
+    // Nothing active: the display follows the playlist selection, so the button
+    // should too. This is what lets a .GYB be switched to MIDI before it is
+    // started.
     if (plHasCurrent()) {
         // Test the extension on the raw entry first. resolvePlayablePath() can
         // extract a zip, and merely highlighting a row must not set that off.
@@ -1747,15 +1767,27 @@ void MainWindow::toggleMidiMode()
     gybokamidi::setMidiModeEnabled(target, !playsViaMidi(target));
     updateMidiModeButtonStyle();
 
-    // Nothing is playing yet - the choice takes effect when this song starts.
-    if (!isPlaying || currentFile.compare(target, Qt::CaseInsensitive) != 0)
+    // The target is not the song that is loaded - nothing to reload, and the
+    // choice takes effect when that song is started.
+    if (currentFile.compare(target, Qt::CaseInsensitive) != 0)
         return;
 
-    // The engine changes underneath the song, so it has to be reloaded. Reload
-    // from the top rather than trying to carry the position across: the OPL
-    // clock and the MIDI clock are different things and matching them would be
-    // guesswork.
-    reloadCurrentSong();
+    // The engine changes underneath the song, so it has to be reloaded. From the
+    // top rather than carrying the position across: the OPL clock and the MIDI
+    // clock are different things and matching them would be guesswork.
+    if (isPlaying) {
+        reloadCurrentSong();
+        return;
+    }
+
+    // Paused on this song. Reloading would start it playing, which is not what
+    // pressing a mode button should do - but leaving it alone is worse: the
+    // button would show MIDI while the paused stream is still the OPL one, and
+    // pressing play would resume that stream because playPause() sees the same
+    // path and takes its resume branch. Clear the loaded state so the next play
+    // loads it again through the engine now selected.
+    if (m_pausedByUser)
+        stop();
 }
 
 // The engine changed under the song, so it has to be loaded again.
@@ -1825,9 +1857,15 @@ void MainWindow::showPatchDialog()
     for (const gybokamidi::Row& r : after)
         if (r.drum != r.baseDrum) { needsRebuild = true; break; }
 
-    if (needsRebuild && playsViaMidi(path) && isPlaying &&
-        currentFile.compare(path, Qt::CaseInsensitive) == 0)
-        reloadCurrentSong(/*keepPosition=*/true);
+    if (needsRebuild && playsViaMidi(path) &&
+        currentFile.compare(path, Qt::CaseInsensitive) == 0) {
+        // Same reasoning as toggleMidiMode(): while it plays, rebuild and come
+        // back to where it was; while paused, the loaded stream no longer
+        // matches the plan and resuming it would play the old channel layout,
+        // so drop it and let the next play build it fresh.
+        if (isPlaying)            reloadCurrentSong(/*keepPosition=*/true);
+        else if (m_pausedByUser)  stop();
+    }
 }
 
 void MainWindow::toggleRecording() {

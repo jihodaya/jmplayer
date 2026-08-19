@@ -363,7 +363,43 @@ if(BUILD_TESTS)
     target_link_libraries(inputs PRIVATE Qt6::Core adplug)
     target_include_directories(inputs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    foreach(t loadall render inputs)
+    # MidiPlayer's parse, tempo map, sound-mode detection and lyric decoding.
+    # It brings in the container handlers and Sc55Bridge because MidiPlayer
+    # references them; nothing here opens a MIDI device or launches an emulator.
+    add_executable(midiall
+        tests/midiall.cpp
+        midiplayer.cpp
+        nobfilehandler.cpp
+        okafilehandler.cpp
+        issfilehandler.cpp
+        gybokamidi.cpp
+        mt32map.cpp
+        settingsmanager.cpp
+        sc55bridge.cpp
+        midireset.cpp
+        # JJoMeSynth is the host that drives the OPL players, so linking it
+        # brings them along. Nothing starts: no device is opened and no player
+        # is loaded unless a test asks for one.
+        jjomesynth.cpp
+        gybplayer.cpp gybbackend.cpp
+        okaplayer.cpp okabackend.cpp
+        imsplayer.cpp
+        bnkfill.cpp
+        gybfilehandler.cpp
+        opltunnelsender.cpp
+        convert/gyb.cpp
+        convert/oksori.cpp
+        convert/smf.cpp
+        convert/gmmap.cpp
+        convert/oplbank.cpp
+    )
+    # Qt6::Widgets is here only because Sc55Bridge includes QApplication for its
+    # window placement; no widget is created and no event loop is started.
+    target_link_libraries(midiall PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug winmm dwmapi)
+    target_include_directories(midiall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    foreach(t loadall render inputs midiall)
         if(ENGLISH_UI)
             target_compile_definitions(${t} PRIVATE ENGLISH_UI)
         endif()

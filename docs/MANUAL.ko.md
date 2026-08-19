@@ -1,4 +1,4 @@
-# JMPlayer R2.7c — 사용자 매뉴얼
+# JMPlayer R2.7d — 사용자 매뉴얼
 
 *[English manual here → MANUAL.en.md](MANUAL.en.md)*
 
