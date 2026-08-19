@@ -76,7 +76,8 @@ static void cleanLeftoverTempMidi()
     if (!tempDir.exists())
         return;
     const QStringList stale =
-        tempDir.entryList(QStringList() << "nob_*.mid" << "oka_*.mid", QDir::Files);
+        tempDir.entryList(QStringList() << "nob_*.mid" << "oka_*.mid"
+                                        << "opl_*.mid", QDir::Files);
     for (const QString& name : stale)
         tempDir.remove(name);
 }

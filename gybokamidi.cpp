@@ -299,10 +299,15 @@ bool loadSidecar(const QString& songPath, QVector<Row>& plan)
         // Trust the name over the index and leave the row at its default if they
         // disagree, rather than silently applying somebody else's choice.
         if (!name.isEmpty() && name.compare(r.oplName, Qt::CaseInsensitive) == 0) {
+            // Clamped because this file is meant to be readable and editable
+            // by hand. An out-of-range program reaches the stream as a data
+            // byte with its top bit set, which is a malformed message rather
+            // than a wrong instrument. Same lesson as Sc55/AudioBuffer: a value
+            // a person can type has to be checked, not trusted.
             r.drum     = ini.value("drum", r.drum).toBool();
-            r.program  = ini.value("program", r.program).toInt();
-            r.bankMsb  = ini.value("bank", r.bankMsb).toInt();
-            r.drumNote = ini.value("note", r.drumNote).toInt();
+            r.program  = qBound(0, ini.value("program",  r.program).toInt(),  127);
+            r.bankMsb  = qBound(0, ini.value("bank",     r.bankMsb).toInt(),  127);
+            r.drumNote = qBound(0, ini.value("note",     r.drumNote).toInt(), 127);
             r.origin   = Origin::User;
             any = true;
         }
