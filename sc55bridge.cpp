@@ -2,6 +2,8 @@
 // sc55bridge.cpp — see sc55bridge.h for why this exists.
 //
 #include "sc55bridge.h"
+
+#include <QRegularExpression>
 #include "uistrings.h"
 #include "settingsmanager.h"
 
@@ -431,16 +433,33 @@ bool Sc55Bridge::Start()
     }
 
     // Nuked-SC55 makes its own sound; jmp's audio device is not involved in
-    // this mode, so jmp's buffer setting cannot help it. The emulator takes
-    // "-ab:<page_size>:[page_count]" for its SDL buffer, and its stock value is
+    // this mode, so jmp's buffer setting cannot help it. Its own buffer is
     // small enough that another program loading - a game grabbing the CPU - can
     // starve it into noise. Off by default so the emulator keeps its own
     // default; set Sc55/AudioBuffer (for example "2048:32") to enlarge it.
+    //
+    // The flag is "-b <size>[:count]". An earlier build of this passed
+    // "-ab:<size>:<count>", which this emulator rejects with "Unknown argument"
+    // and exits over - and it exits before opening the pipe, which used to hang
+    // jmp outright (see the connect loop below). Reported 2026-08-19.
+    //
+    // The value is checked here rather than passed through: a typo in a hand
+    // edited settings.ini must not be able to stop the emulator from starting.
+    // Written [0-9] rather than \d on purpose - as a C++ literal "\d" is an
+    // unknown escape that collapses to "d", which compiles with only a warning
+    // and then rejects every valid value.
     {
         const QString ab = SettingsManager::instance()
             .value("Sc55/AudioBuffer", QString()).toString().trimmed();
-        if (!ab.isEmpty())
-            args << QString("-ab:%1").arg(ab);
+        if (!ab.isEmpty()) {
+            static const QRegularExpression re(QStringLiteral("^[0-9]{1,6}(:[0-9]{1,4})?$"));
+            if (re.match(ab).hasMatch()) {
+                args << "-b" << ab;
+            } else {
+                qWarning() << "[SC55] ignoring Sc55/AudioBuffer =" << ab
+                           << "- expected <size> or <size>:<count>, e.g. 2048:32";
+            }
+        }
     }
 
     m_pProcess->start(exe, args);
@@ -466,13 +485,38 @@ bool Sc55Bridge::Start()
     //    them the buffer fills and the emulator BLOCKS mid-startup - so a ROM
     //    problem that produces a few screens of complaint never even reaches
     //    the point of opening our pipe, and the wait always ran to the timeout.
+    // ...and the poll only actually polls if the handle is non-blocking. The
+    // pipe is created PIPE_WAIT, so ConnectNamedPipe parks the calling thread
+    // until a client shows up: the loop below would never reach its second
+    // iteration, never drain the child, never notice it had died, and never
+    // time out. That is why a bad command-line argument - the emulator rejects
+    // it and exits before opening the pipe - froze jmp until it was killed
+    // (2026-08-19). Switch to PIPE_NOWAIT for the wait, so ConnectNamedPipe
+    // returns ERROR_PIPE_LISTENING straight away, then put it back afterwards
+    // because every read and write after this point expects to block.
+    {
+        DWORD mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT;
+        SetNamedPipeHandleState(m_hPipe, &mode, nullptr, nullptr);
+    }
+
     const int nStep = 100;
     int nWaited = 0;
     bool bConnected = false;
     QString childOutput;
     while (nWaited < ConnectTimeoutMs) {
-        if (ConnectNamedPipe(m_hPipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED) {
+        if (ConnectNamedPipe(m_hPipe, nullptr)) {
             bConnected = true;
+            break;
+        }
+        const DWORD err = GetLastError();
+        if (err == ERROR_PIPE_CONNECTED) {
+            bConnected = true;
+            break;
+        }
+        // ERROR_PIPE_LISTENING is the non-blocking "nobody yet"; anything else
+        // is a real failure and waiting out the timeout would not help.
+        if (err != ERROR_PIPE_LISTENING && err != ERROR_NO_DATA) {
+            qWarning() << "[SC55] ConnectNamedPipe failed, error" << err;
             break;
         }
         childOutput += QString::fromLocal8Bit(m_pProcess->readAllStandardError());
@@ -482,6 +526,12 @@ bool Sc55Bridge::Start()
         QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, nStep);
         QThread::msleep(20);
         nWaited += nStep;
+    }
+
+    // Back to blocking for the rest of the session.
+    {
+        DWORD mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT;
+        SetNamedPipeHandleState(m_hPipe, &mode, nullptr, nullptr);
     }
 
     if (!bConnected) {

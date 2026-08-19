@@ -13,6 +13,8 @@
 #include "nobfilehandler.h"
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
+#include "patchdialog.h"
+#include "gybokamidi.h"
 #include "okaplayer.h"
 #include "okabackend.h"
 #include "soundfontmanagerdialog.h"
@@ -117,7 +119,7 @@ void MainWindow::playPause()
             QString rawPath = plCurrentPath();
             QString filePath = resolvePlayablePath(rawPath);
             bool isImsFile = isOplFile(filePath);
-            bool isGybFile = filePath.toLower().endsWith(".gyb");
+            bool isGybFile = this->isGybFile(filePath);
             bool isNobFile = filePath.toLower().endsWith(".nob");
             bool isOka = isOkaFile(filePath);
             bool playOkaViaOpl = isOkaOplFile(filePath);
@@ -839,6 +841,7 @@ void MainWindow::onPlaybackFinished()
 
 void MainWindow::setPlaying(bool playing)
 {
+    updateMidiModeButtonStyle();
     isPlaying = playing;
     if (playing) m_pausedByUser = false; // any (re)start clears the pause flag
     JJoMeSynth::instance().setPlaybackActive(playing);
@@ -1271,6 +1274,9 @@ void MainWindow::onFileSelected()
     // This keeps the display locked to the currently playing song even if the user browses the playlist.
     if (isPlaying) return;
 
+    // The MIDI button follows the selection, not just the playing song.
+    updateMidiModeButtonStyle();
+
     // Remember whether the user is typing in the search box BEFORE the preview
     // work below — lyrics-window updates, monitor mode switches and zip
     // extraction can steal focus mid-way, and we must hand it back afterwards.
@@ -1652,7 +1658,12 @@ bool MainWindow::isOplFile(const QString& filePath) const
 
 bool MainWindow::isGybFile(const QString& filePath) const
 {
-    return filePath.toLower().endsWith(".gyb");
+    // "Is the GYB OPL engine playing this", not "does the name end in .gyb".
+    // Every caller - routing, seeking, tempo, the title lookup - wants the
+    // former, and a .GYB set to play through MIDI belongs to midiPlayer, so it
+    // has to answer false here or eleven call sites would each need the same
+    // exception.
+    return filePath.toLower().endsWith(".gyb") && !playsViaMidi(filePath);
 }
 
 bool MainWindow::isOkaFile(const QString& filePath) const
@@ -1662,7 +1673,161 @@ bool MainWindow::isOkaFile(const QString& filePath) const
 
 bool MainWindow::isOkaOplFile(const QString& filePath) const
 {
-    return isOkaFile(filePath) && filePath.toLower().endsWith(".oka");
+    // A .OKA set to play through MIDI is no longer an OPL file as far as the
+    // routing is concerned - it falls through to midiPlayer like a .NOB does.
+    return isOkaFile(filePath) && filePath.toLower().endsWith(".oka") &&
+           !playsViaMidi(filePath);
+}
+
+// Which song the MIDI button and F5 act on.
+//
+// While a song plays that is the song playing. When nothing is playing it is
+// whatever is highlighted in the playlist, so the button appears - and can be
+// set - the moment a .GYB or .OKA is selected, without having to start it
+// first. onFileSelected() already bails out early while playing, which is what
+// keeps the two from fighting.
+QString MainWindow::patchTargetPath()
+{
+    if (!currentFile.isEmpty() && (isPlaying || !plHasCurrent()))
+        return currentFile;
+    if (plHasCurrent()) {
+        // Test the extension on the raw entry first. resolvePlayablePath() can
+        // extract a zip, and merely highlighting a row must not set that off.
+        const QString raw = plCurrentPath();
+        if (gybokamidi::isSupported(raw))
+            return resolvePlayablePath(raw);
+    }
+    return currentFile;
+}
+
+bool MainWindow::playsViaMidi(const QString& filePath) const
+{
+    return gybokamidi::isSupported(filePath) &&
+           gybokamidi::midiModeEnabled(filePath);
+}
+
+void MainWindow::updateMidiModeButtonStyle()
+{
+    if (!midiModeButton) return;
+
+    // Only .GYB and .OKA have an OPL instrument table to reassign, so the
+    // button means nothing anywhere else.
+    midiModeButton->setVisible(gybokamidi::isSupported(patchTargetPath()));
+
+    const QString target = patchTargetPath();
+    const bool on = !target.isEmpty() && playsViaMidi(target);
+
+    // Matches updateOplTunnelButtonStyle()'s metrics exactly - same radius,
+    // padding, margins and height - so MIDI, OUT and DSP sit on one baseline.
+    // Only the font is a point smaller, because "MIDI" is four characters in
+    // the same 40 px the others use for three.
+    const QString baseStyle =
+        "QPushButton { font-weight: bold; border-radius: 3px; padding: 0px; margin: 0px; "
+        "min-height: 26px; max-height: 26px; color: white; font-size: 10px; } ";
+    QString style;
+    if (on) {
+        // Purple: not the tunnel's teal and not any DSP level, so the three
+        // buttons' states stay distinguishable at a glance.
+        style = baseStyle +
+            "QPushButton { border: 2px solid #a06bd8; background-color: #7a3fb0; } "
+            "QPushButton:hover { background-color: #8f4dc9; border: 2px solid #c08ce8; }";
+    } else {
+        style = baseStyle +
+            "QPushButton { border: 2px solid #666666; background-color: #3a3a3a; color: #888888; } "
+            "QPushButton:hover { background-color: #4a4a4a; border: 2px solid #0078d4; }";
+    }
+    midiModeButton->setStyleSheet(style);
+}
+
+void MainWindow::toggleMidiMode()
+{
+    const QString target = patchTargetPath();
+    if (!gybokamidi::isSupported(target)) return;
+
+    gybokamidi::setMidiModeEnabled(target, !playsViaMidi(target));
+    updateMidiModeButtonStyle();
+
+    // Nothing is playing yet - the choice takes effect when this song starts.
+    if (!isPlaying || currentFile.compare(target, Qt::CaseInsensitive) != 0)
+        return;
+
+    // The engine changes underneath the song, so it has to be reloaded. Reload
+    // from the top rather than trying to carry the position across: the OPL
+    // clock and the MIDI clock are different things and matching them would be
+    // guesswork.
+    reloadCurrentSong();
+}
+
+// The engine changed under the song, so it has to be loaded again.
+// loadAndPlayByRawPath() is the one entry point that sets every player up and
+// starts it; clearing currentFile first is what makes it treat this as a new
+// song rather than a resume.
+//
+// `keepPosition` comes back to where the song was. Moving an instrument between
+// melodic and percussion changes which MIDI channel it plays on, so that one
+// edit cannot be applied to a running stream - but losing your place three
+// minutes into a song for it is a different thing from a brief gap, and there
+// is no reason to pay it.
+void MainWindow::reloadCurrentSong(bool keepPosition)
+{
+    const QString raw = currentRawPath;
+    if (raw.isEmpty()) return;
+
+    const unsigned long resumeAt =
+        (keepPosition && midiPlayer) ? midiPlayer->getCurrentPosition() : 0;
+
+    stop();
+    currentFile.clear();
+    currentRawPath.clear();
+    if (!loadAndPlayByRawPath(raw)) return;
+
+    // Seeking has to wait until the new stream is loaded and running, which
+    // loadAndPlayByRawPath() has just done.
+    if (resumeAt > 0 && midiPlayer)
+        midiPlayer->setPosition(resumeAt);
+}
+
+void MainWindow::showPatchDialog()
+{
+    const QString path = patchTargetPath();
+    if (!gybokamidi::isSupported(path)) {
+        qDebug() << "[PatchDialog] F5 applies to .GYB/.OKA played through MIDI";
+        return;
+    }
+
+    QVector<gybokamidi::Row> plan = gybokamidi::buildPlan(path);
+    if (plan.isEmpty()) {
+        qWarning() << "[PatchDialog] could not read the instruments of" << path;
+        return;
+    }
+
+    PatchDialog dlg(path, plan, this);
+
+    // Heard immediately: a melodic change is just a program change on the
+    // channels that slot plays, so it can go straight out. Switching a row
+    // between melodic and percussion moves it to another channel, which the
+    // stream has to be rebuilt for - that happens on OK.
+    connect(&dlg, &PatchDialog::assignmentChanged, this,
+            [this](int, const gybokamidi::Row& row) {
+                if (row.drum || !midiPlayer) return;
+                for (int ch : row.channels)
+                    midiPlayer->sendLiveProgramChange(ch, row.bankMsb, row.program);
+            });
+
+    dlg.exec();   // the dialog writes its own file, and only when asked to
+
+    // Melodic changes were already heard as they were made; a row moved between
+    // melodic and percussion plays on a different channel, so the stream has to
+    // be rebuilt for those. Rebuilding always would restart the song after any
+    // edit, so it happens only when one actually needs it.
+    bool needsRebuild = false;
+    const QVector<gybokamidi::Row> after = dlg.plan();
+    for (const gybokamidi::Row& r : after)
+        if (r.drum != r.baseDrum) { needsRebuild = true; break; }
+
+    if (needsRebuild && playsViaMidi(path) && isPlaying &&
+        currentFile.compare(path, Qt::CaseInsensitive) == 0)
+        reloadCurrentSong(/*keepPosition=*/true);
 }
 
 void MainWindow::toggleRecording() {

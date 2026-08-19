@@ -1,4 +1,5 @@
 #include "midiplayer.h"
+#include "gybokamidi.h"
 #include "nobfilehandler.h"
 #include "okafilehandler.h"
 #include "opltunnelsender.h" // to stay off the wire while the OPL tunnel owns it
@@ -292,6 +293,15 @@ bool MidiPlayer::isConnected() const
     return connected;
 }
 
+void MidiPlayer::sendLiveProgramChange(int channel, int bankMsb, int program)
+{
+    if (channel < 0 || channel > 15) return;
+    if (program < 0 || program > 127) return;
+    if (bankMsb > 0)
+        sendMidiMessage((unsigned char)(0xB0 | channel), 0, (unsigned char)bankMsb);
+    sendMidiMessage((unsigned char)(0xC0 | channel), (unsigned char)program, 0);
+}
+
 bool MidiPlayer::loadMidiFile(const QString &filename)
 {
     // Stop playback before modifying tracks to prevent background thread crash
@@ -300,8 +310,40 @@ bool MidiPlayer::loadMidiFile(const QString &filename)
     QString actualFilename = filename;
     QString tempMidiPath;
 
+    // A .GYB or .OKA reaches this function only when the song is set to play
+    // through MIDI rather than OPL (see MainWindow::playsViaMidi). Build the
+    // stream from the song's notes and its instrument assignment, then hand it
+    // on exactly like a .NOB. .OKM and .OKW are not included: they already play
+    // as MIDI, and routing them through the GM remap would change how songs
+    // that have always worked sound.
+    if (gybokamidi::isSupported(filename)) {
+        QString err;
+        QByteArray midiData = gybokamidi::toMidi(
+            filename, gybokamidi::buildPlan(filename), &err);
+        if (midiData.isEmpty()) {
+            qWarning() << "[MidiPlayer] MIDI build failed for" << filename << err;
+            emit errorOccurred(err.isEmpty() ? QString("Could not build MIDI") : err);
+            return false;
+        }
+
+        QString tempDir = QCoreApplication::applicationDirPath() + "/temp";
+        QDir().mkpath(tempDir);
+        QTemporaryFile *tempFile = new QTemporaryFile(tempDir + "/opl_XXXXXX.mid", this);
+        if (!tempFile->open()) {
+            emit errorOccurred("Failed to create temporary MIDI file");
+            delete tempFile;
+            return false;
+        }
+        tempFile->write(midiData);
+        tempFile->flush();
+        tempMidiPath = tempFile->fileName();
+        actualFilename = tempMidiPath;
+        if (currentTempFile) delete currentTempFile;
+        currentTempFile = tempFile;
+        qDebug() << "[MidiPlayer] built" << midiData.size() << "bytes of MIDI from" << filename;
+    }
     // NOB 파일인 경우 MIDI 데이터 추출
-    if (filename.toLower().endsWith(".nob")) {
+    else if (filename.toLower().endsWith(".nob")) {
         qDebug() << "NOB file detected:" << filename;
 
         // NOB 파일 검증

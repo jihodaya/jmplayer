@@ -41,11 +41,12 @@ MCU's UART, which is the entry point a MIDI input reaches, and the reason the
 same music played correctly through loopMIDI. Its buffer is 8192 bytes and is
 drained per instruction, so no pacing is needed.
 
-## Three changes, not one
+## Three changes to get sound, and one for stability
 
 Routing alone produces **silence**. Two more things are tied to the computer
-switch and have to come loose with it. All three are needed; any one alone is
-still silent.
+switch and have to come loose with it. The first three are needed for any sound
+at all; any one alone is still silent. The fourth is separate - it fixes noise
+under load and is described at the end.
 
 1. **`FE_RouteSerial`** delivers to `PostMIDI` instead of `PostSerial`.
 
@@ -73,7 +74,22 @@ still silent.
    old loop additionally spun at full speed **holding `serial_io_mutex`**,
    starving the update it depended on and burning a core.
 
-A fourth, unrelated hunk qualifies `isnan` as `std::isnan` in `lcd_sdl.cpp`;
+4. **The reader thread registers with MMCSS** (`AvSetMmThreadCharacteristicsW`,
+   "Pro Audio"), added 2026-08-19. SDL already puts the audio callback thread
+   there - measured at priority 24 - but the serial reader stayed at the
+   ordinary 9. It takes `serial_io_mutex` on every pass and the emulation that
+   fills the audio buffer wants the same lock, so any moment this thread is
+   descheduled while holding it, sound stops being generated.
+
+   That is why a user reported noise while the built-in Windows card game
+   *loaded* even though the whole process uses under a quarter of one core: it
+   was never short of CPU, it was losing the lock at the wrong moment. **The
+   same music through loopMIDI has never had the problem, because this thread
+   only exists on the named-pipe path** - which is what identified it. Measured
+   before and after with the pipe connected: `24, 9, 9, 8...` became
+   `25, 24, 9, 9...`. Needs `avrt` on the link line, which the patch adds.
+
+A fifth, unrelated hunk qualifies `isnan` as `std::isnan` in `lcd_sdl.cpp`;
 plain `isnan` is only in scope when `<math.h>` leaks it as a macro, which the
 MinGW toolchain used here does not do.
 

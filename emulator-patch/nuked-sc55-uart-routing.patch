@@ -1,3 +1,16 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3f6ca90..5b58346 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -167,7 +167,7 @@ if(SDL2_FOUND)
+     endif()
+ 
+     if(WIN32)
+-        target_link_libraries(nuked-sc55 PRIVATE shlwapi winmm)
++        target_link_libraries(nuked-sc55 PRIVATE shlwapi winmm avrt)
+     endif()
+ 
+     if(APPLE)
 diff --git a/src/common/rom_loader.cpp b/src/common/rom_loader.cpp
 index d98c260..c5c2f90 100644
 --- a/src/common/rom_loader.cpp
@@ -295,10 +308,18 @@ index cc9ff9b..bc0bcc0 100755
      FE_Quit(frontend);
  
 diff --git a/src/standard/serial_win32.cpp b/src/standard/serial_win32.cpp
-index a6d1730..7061d0e 100644
+index a6d1730..5d4f27e 100644
 --- a/src/standard/serial_win32.cpp
 +++ b/src/standard/serial_win32.cpp
-@@ -415,16 +415,45 @@ void SERIAL_Quit()
+@@ -4,6 +4,7 @@
+ #include <mutex>
+ #include <string>
+ #include <windows.h>
++#include <avrt.h>
+ #include <thread>
+ 
+ #define BUFFER_SIZE 4096
+@@ -415,16 +416,71 @@ void SERIAL_Quit()
      return;
  }
  
@@ -317,6 +338,29 @@ index a6d1730..7061d0e 100644
 +// in both places is safe.
  void SERIAL_Read_Updater(FE_Application& fe, serial_read_callback read_callback)
  {
++    // Ask the multimedia scheduler to treat this like an audio thread.
++    //
++    // SDL already registers the audio callback thread with MMCSS - measured, it
++    // runs at priority 24 - but this one is left at the ordinary 9 or 10. It
++    // takes serial_io_mutex on every pass, and the emulation that fills the
++    // audio buffer needs the same lock, so whenever this thread is descheduled
++    // while holding it the sound stops being generated. That is why a very
++    // light program starting up - the Windows card game, in the report of
++    // 2026-08-19 - can put noise in the output while the process as a whole is
++    // using under a quarter of one core: it is not short of CPU, it is losing
++    // the lock at the wrong moment.
++    //
++    // This thread exists only on the named-pipe path, which is why the same
++    // music through loopMIDI has never had the problem.
++    //
++    // "Pro Audio" is the right task here rather than a raw priority bump: the
++    // thread does almost nothing, so it takes essentially nothing away from
++    // whatever else is running, and MMCSS gives back its boost when it idles.
++    DWORD mmcssIndex = 0;
++    HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcssIndex);
++    if (mmcss)
++        AvSetMmThreadPriority(mmcss, AVRT_PRIORITY_HIGH);
++
      while (serial_thread_run)
      {
 -        std::lock_guard<std::mutex> lock(serial_io_mutex);
@@ -347,4 +391,7 @@ index a6d1730..7061d0e 100644
 +        if (!delivered)
 +            std::this_thread::sleep_for(std::chrono::microseconds(250));
      }
++
++    if (mmcss)
++        AvRevertMmThreadCharacteristics(mmcss);
  }

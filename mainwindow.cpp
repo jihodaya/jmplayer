@@ -601,6 +601,19 @@ void MainWindow::setupUI()
     oplTunnelButton->hide(); // Initially hidden, only shown for OPL files
     updateOplTunnelButtonStyle();
 
+    // .GYB / .OKA through a MIDI module instead of the OPL chip - what
+    // GAYOBANG's sound-source mode 7 and NORE45 did. F5 opens the instrument
+    // list while it plays.
+    midiModeButton = new QPushButton("MIDI", this);
+    midiModeButton->setFocusPolicy(Qt::NoFocus);
+    // Same 40x26 as OUT and DSP so the three line up. The label needs a smaller
+    // face than theirs to fit four characters in that width.
+    midiModeButton->setFixedSize(40, 26);
+    midiModeButton->setToolTip(LSTR("MIDI로 재생: OPL 대신 MIDI 음원으로 연주 (F5로 악기 변경)",
+                                    "Play through MIDI: use a MIDI module instead of OPL (F5 to change instruments)"));
+    midiModeButton->hide();
+    updateMidiModeButtonStyle();
+
     // Create Roll button
     rollButton = new QPushButton("🎹", this);
     rollButton->setFocusPolicy(Qt::NoFocus);
@@ -739,6 +752,7 @@ void MainWindow::setupUI()
 
     positionLayout->addWidget(positionLabel);
     positionLayout->addStretch();
+    positionLayout->addWidget(midiModeButton);  // MIDI, then OUT, then DSP
     positionLayout->addWidget(oplTunnelButton); // OUT before DSP (user request)
     positionLayout->addWidget(dspButton);
     positionLayout->addWidget(bankButton);
@@ -963,6 +977,7 @@ void MainWindow::connectSignals()
     connect(lyricsButton, &QPushButton::clicked, this, &MainWindow::toggleLyricsWindow);
     connect(dspButton, &QPushButton::clicked, this, &MainWindow::toggleDsp);
     connect(oplTunnelButton, &QPushButton::clicked, this, &MainWindow::toggleOplTunnel);
+    connect(midiModeButton, &QPushButton::clicked, this, &MainWindow::toggleMidiMode);
     connect(rollButton, &QPushButton::clicked, this, &MainWindow::togglePianoRoll);
     connect(bankButton, &QPushButton::clicked, this, &MainWindow::onSelectBankFile);
     connect(repeatModeButton, &QPushButton::clicked, this, &MainWindow::onRepeatModeChanged);
@@ -1723,6 +1738,14 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             return true;
         }
 
+        if (keyEvent->key() == Qt::Key_F5) {
+            // The song's instrument list, editable while it plays. Only means
+            // anything for a .GYB/.OKA going out over MIDI - the OPL engine
+            // plays the song's own FM patches and has nothing to reassign.
+            showPatchDialog();
+            return true;
+        }
+
         if (keyEvent->key() == Qt::Key_F6) {
             // Sound-module reset settings (midireset/midiresetdialog.h).
             static bool isMidiResetOpen = false;
@@ -1964,7 +1987,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.6b";
+    QString title = "🎵 JJoMe MIDI Player v2.7b";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -2377,12 +2400,27 @@ void MainWindow::showHelpDialog()
         "<tr><td><b>F9</b></td><td>Key transpose -1 semitone (min -6, all formats)</td></tr>"
         "<tr><td><b>F10</b></td><td>Key transpose +1 semitone (max +6, all formats)</td></tr>"
         "<tr><td><b>F11</b></td><td>Reset tempo &amp; key to the original speed/pitch</td></tr>"
+        "<tr><td><b>F5</b></td><td>Change the instruments of a .GYB / .OKA played through MIDI &mdash; edits are heard at once, and nothing is saved until you press Save</td></tr>"
+        "<tr><td><b>F5</b></td><td>Change instruments &mdash; for a .gyb / .oka played through MIDI</td></tr>"
         "<tr><td><b>F6</b></td><td>Sound-module reset settings (reset the device on each new song)</td></tr>"
         "<tr><td><b>F12</b></td><td>Open the OPL-like stereo &amp; performance mode settings (1-9, 0)</td></tr>"
         "</table>"
         "<br/>"
         "<b>[Supported music file extensions]</b><br/>"
         "&#8226; <b>*.mid, *.midi, *.nob, *.ims, *.rol, *.sop, *.gyb, *.oka, *.okm, *.vgm, *.vgz</b><br/>"
+        "<br/><b>[MIDI button &mdash; .GYB / .OKA through a sound module]</b><br/>"
+        "&#8226; Select a <b>.gyb</b> or <b>.oka</b> and the <b>MIDI</b> button appears "
+        "beside OUT. It plays the song on a MIDI module instead of the OPL chip, "
+        "the way GAYOBANG and NORE45 could.<br/>"
+        "&#8226; A program change in these formats picks from the song's own OPL "
+        "instrument table, not from General MIDI, so each one has to be given a GM "
+        "instrument. <b>F5</b> lists them with where each default came from: the "
+        "song file's own assignment, a match on the patch name, or nothing "
+        "recognised &mdash; the last is what needs your ear.<br/>"
+        "&#8226; Changes are heard as you make them, and a changed row is "
+        "highlighted; <b>Revert all</b> puts every one of them back. "
+        "<b>Nothing is written until you press Save</b>, which leaves a small "
+        "<b>.ini</b> beside the song.<br/>"
     );
     // Which of the two storage locations is live is otherwise invisible, and not
     // knowing is itself a source of confusion once portable mode exists.
@@ -2416,12 +2454,26 @@ void MainWindow::showHelpDialog()
         "<tr><td><b>F9</b></td><td>연주 음정(Key Transpose) 1음 감소 (최소 -6, 전 포맷 지원)</td></tr>"
         "<tr><td><b>F10</b></td><td>연주 음정(Key Transpose) 1음 증가 (최대 +6, 전 포맷 지원)</td></tr>"
         "<tr><td><b>F11</b></td><td>변경된 템포 및 연주 키를 원곡 속도/음정으로 초기화 (템포/키 변경 지원)</td></tr>"
+        "<tr><td><b>F5</b></td><td>MIDI로 재생 중인 .GYB / .OKA의 악기 변경 &mdash; 바꾸면 바로 들리고, 저장을 눌러야 파일에 기록됩니다</td></tr>"
+        "<tr><td><b>F5</b></td><td>악기 변경 &mdash; MIDI로 재생하는 .gyb / .oka 전용</td></tr>"
         "<tr><td><b>F6</b></td><td>음원 리셋 설정 (곡을 새로 재생할 때 장치를 리셋)</td></tr>"
-        "<tr><td><b>F12</b></td><td>OPL 유사 스테레오 및 연주모드 설정 창 열기 (1~9)</td></tr>"
+        "<tr><td><b>F12</b></td><td>OPL 유사 스테레오 및 연주모드 설정 창 열기 (1~9, 0)</td></tr>"
         "</table>"
         "<br/>"
         "<b>[지원 음악 파일 확장자]</b><br/>"
         "• <b>*.mid, *.midi, *.nob, *.ims, *.rol, *.sop, *.gyb, *.oka, *.okm, *.vgm, *.vgz</b><br/>"
+        "<br/><b>[MIDI 버튼 &mdash; .GYB / .OKA를 음원으로 연주]</b><br/>"
+        "&#8226; <b>.gyb</b>나 <b>.oka</b>를 선택하면 OUT 옆에 <b>MIDI</b> 버튼이 "
+        "나타납니다. OPL 칩 대신 MIDI 음원으로 연주합니다 &mdash; 가요방과 노래방45가 "
+        "하던 것과 같은 방식입니다.<br/>"
+        "&#8226; 이 포맷의 악기 번호는 GM이 아니라 <b>곡이 가진 OPL 악기표</b>를 "
+        "가리키므로, 하나씩 GM 악기를 정해줘야 합니다. <b>F5</b>를 누르면 목록이 "
+        "뜨고, 각 기본값이 어디서 왔는지 함께 보여줍니다 &mdash; 곡에 저장된 배정, "
+        "악기 이름으로 추정, 또는 인식하지 못함. 마지막 것이 귀로 골라야 할 "
+        "것들입니다.<br/>"
+        "&#8226; 바꾸면 바로 들리고, 바꾼 줄은 색이 달라집니다. <b>모두 되돌리기</b>로 "
+        "한 번에 원래대로 돌릴 수 있습니다. <b>저장을 누르기 전에는 아무것도 "
+        "기록하지 않으며</b>, 저장하면 곡 옆에 작은 <b>.ini</b> 파일이 생깁니다.<br/>"
     );
     helpText += QString::fromUtf8(
         "<br/><b>[설정 파일 위치]</b><br/>"

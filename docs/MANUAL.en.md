@@ -1,4 +1,4 @@
-# JMPlayer R2.5h — User Manual
+# JMPlayer R2.7b — User Manual
 
 *[한국어 매뉴얼은 여기 → MANUAL.ko.md](MANUAL.ko.md)*
 
@@ -12,9 +12,9 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 |---|---|---|---|
 | `.mid` `.midi` | Standard MIDI | SoundFont (JJoMe Synth) or system MIDI device | – |
 | `.nob` | Oksori karaoke (MIDI + Johab lyrics) | SoundFont / MIDI device | ✔ syllable sync |
-| `.oka` | Oksori karaoke (OPL) | OPL3 emulation | ✔ syllable sync |
+| `.oka` | Oksori karaoke (OPL) | OPL3 emulation **or a MIDI module** (section 14) | ✔ syllable sync |
 | `.okm` `.okw` | Oksori karaoke (MIDI) | SoundFont / MIDI device | ✔ syllable sync |
-| `.gyb` | Gayobang karaoke (OPL) — Korean & English releases | OPL3 emulation | ✔ syllable sync |
+| `.gyb` | Gayobang karaoke (OPL) — Korean & English releases | OPL3 emulation **or a MIDI module** (section 14) | ✔ syllable sync |
 | `.ims` (+`.iss`) | IMS AdLib music (+ISS lyric file) | OPL3 emulation | ✔ (with .iss) |
 | `.rol` | AdLib Visual Composer | OPL3 emulation | – |
 | `.sop` | Note (sopepos) | OPL3 emulation | – |
@@ -58,6 +58,7 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | **DSP** | Analog simulation for OPL output (LPF + soft saturation), 3 levels: DSP → DSP2 → DSP3 → off |
 | 🎹 | Toggle the **Piano Roll** window |
 | **BNK** | Select an external OPL instrument bank (`.BNK` / `.IBK`) for AdLib formats |
+| **MIDI** | play a `.gyb` / `.oka` **through a MIDI module** instead of OPL (section 14). Appears when one is selected |
 | **OUT** | **OPL tunnel** — stream OPL registers to the selected MIDI device (section 12, `Ctrl+Shift+O`) |
 | 📜 | Toggle the **Lyrics Window** |
 | ⏺ | Record the audio output to a WAV file (also **Ctrl+R**) |
@@ -77,6 +78,7 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | **F9 / F10** | Key transpose −1 / +1 semitone (range −6…+6, all formats) |
 | **F11** | Reset tempo and key to the original |
 | **F12** | OPL pseudo-stereo / performance mode dialog (modes 1–9) |
+| **F5** | **Change instruments** — for a `.gyb` / `.oka` played through MIDI (section 14) |
 | **F6** | **Sound-module reset** — whether to reset the device on each new song (section 13) |
 | **Ctrl+R** | Start / stop WAV recording |
 | **Ctrl+Shift+O** | Toggle the OPL tunnel (same as the **OUT** button) |
@@ -184,7 +186,37 @@ previous song leaves no patches, volumes or effects behind.
   driving an external MIDI module.
 
 
-## 14. Tips
+## 14. `.GYB` / `.OKA` through a MIDI module (**MIDI** button, **F5**)
+
+GAYOBANG and NORE45 could both play these songs on a **MIDI module instead of the OPL chip** (sound source 7). This brings that back.
+
+**Turning it on** — select a `.gyb` or `.oka` in the playlist and the **MIDI** button appears. Press it and that song plays through whatever MIDI output is selected — SoundFont, a system MIDI device, or Nuked SC-55. You can set it before starting the song.
+
+**Why instruments have to be assigned** — a program change in these formats indexes the song's **own OPL instrument table**, not General MIDI. Sent as-is, a bass drum lands on Vibraphone. So each slot needs a GM instrument.
+
+**F5 — the instrument list**
+
+| Column | Meaning |
+|---|---|
+| OPL instrument | the name the song gives that slot |
+| Notes | how many notes it actually plays (sorted, busiest first) |
+| Default from | one of the three below |
+| Type | melodic or percussion |
+| Play as | one of the 128 GM instruments, or a percussion note |
+
+Defaults are ranked by how much they can be trusted:
+
+1. **From the song file** — somebody chose it in the DOS program in the 1990s and it was saved into the file. Stored as an MT-32 tone number, shown translated to GM. The most reliable of the three.
+2. **Matched by name** — the patch name is matched against a rule set. Across the real library this settles about **89 %** of slot uses.
+3. **Not recognised** — nothing is known. **These are the ones that need your ear, and there are usually only three or four per song.** Tick *Show only what was not recognised* to see just those.
+
+**Changes are heard as you make them** — pick an instrument while the song plays and it changes at once. (Switching a row between melodic and percussion moves it to another channel, so only that reloads the song.) A changed row is highlighted, and **Revert all** puts every one of them back.
+
+**Nothing is written until you press Save.** Try things out, close the window, and no file is left behind. **Save** writes a small `SONGNAME.GYB.ini` beside the song, and the next time you open that song it comes back. The original song file is never modified.
+
+> Songs in a location that cannot be written to — a CD, for instance — save into the settings folder instead.
+
+## 15. Tips
 
 * All settings (volume, device, repeat mode, DSP level, last folder/position) are saved automatically.
 * ZIP archives can be opened directly — contained songs are listed and playable.

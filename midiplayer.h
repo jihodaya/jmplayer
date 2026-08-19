@@ -95,6 +95,11 @@ public:
     // sendSysExMessage (midiOutLongMsg to the connected device).
     void sendRawSysEx(const std::vector<unsigned char> &data) { sendSysExMessage(data); }
 
+    // Change one channel's instrument on the device right now, without touching
+    // the loaded stream. The patch dialog uses this so an instrument picked
+    // mid-song is heard immediately; the stream itself is rebuilt on OK.
+    void sendLiveProgramChange(int channel, int bankMsb, int program);
+
     // Sound-module reset before each new song (see midireset/midireset.h).
     // MainWindow reads/writes these to wire the settings UI; the actual send
     // happens inside play()'s new-song branch.

@@ -195,6 +195,29 @@ set(SOURCES
     midireset.cpp
     midiresetdialog.cpp
     sc55bridge.cpp
+    mt32map.cpp
+    gybokamidi.cpp
+    patchdialog.cpp
+
+    # Song-format readers borrowed from jmpconv - a companion converter kept
+    # outside this repository - used only to build an SMF from a .GYB/.OKA so
+    # it can be played through MIDI instead of OPL. Qt-free, namespace jmpconv.
+    #
+    # TREAT THESE AS READ-ONLY. What guarantees they are correct is jmpconv's
+    # corpus check - 86/86 byte-identical round trips, 74566/74566 GYB note
+    # events - and the corpus is period commercial material that cannot be
+    # redistributed, so it stays in okpiri and is not here. Editing these files
+    # here means editing them with the test removed. Fix them in okpiri and copy
+    # the result over. New behaviour belongs in jmp's own files instead.
+    #
+    # jmpconv's convert.cpp/ims.*/rol.* are deliberately not here: file-to-file
+    # conversion is not what this path does, and they were the only thing
+    # pulling in the ROL and IMS readers.
+    convert/smf.cpp
+    convert/gyb.cpp
+    convert/oksori.cpp
+    convert/gmmap.cpp
+    convert/oplbank.cpp
 )
 
 set(HEADERS
@@ -218,6 +241,17 @@ set(HEADERS
     pianorollwindow.h
     playlistmodel.h
     oplstereodialog.h
+    mt32map.h
+    gybokamidi.h
+    patchdialog.h
+
+    convert/byteio.h
+    convert/song.h
+    convert/smf.h
+    convert/gyb.h
+    convert/oksori.h
+    convert/gmmap.h
+    convert/oplbank.h
 )
 
 # Resource files

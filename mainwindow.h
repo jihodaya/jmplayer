@@ -119,6 +119,14 @@ private slots:
     bool isGybFile(const QString& filePath) const;
     bool isOkaFile(const QString& filePath) const;
     bool isOkaOplFile(const QString& filePath) const;
+    // True when this .GYB/.OKA is set to play through a MIDI module rather than
+    // the OPL engine. GAYOBANG and NORE45 both offered this; see gybokamidi.h.
+    bool playsViaMidi(const QString& filePath) const;
+    QString patchTargetPath();
+    void toggleMidiMode();
+    void updateMidiModeButtonStyle();
+    void showPatchDialog();
+    void reloadCurrentSong(bool keepPosition = false);
     void onLyricChannelChanged(int newChannel); // NOB 채널 변경
     void updateWindowTitle();
     void toggleDsp();
@@ -204,6 +212,7 @@ protected:
     QPushButton *lyricsButton;
     QPushButton *dspButton;
     QPushButton *oplTunnelButton; // OPL register tunnel to the jukebox (shown with DSP)
+    QPushButton *midiModeButton;  // .GYB/.OKA through MIDI instead of OPL (F5 edits the mapping)
     QPushButton *rollButton;
     QPushButton *bankButton;
     QPushButton *recordButton;
