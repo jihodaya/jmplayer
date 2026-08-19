@@ -84,9 +84,7 @@ unsigned long OkaBackend::tempoAtTick(uint64_t tick) const
 
 bool OkaBackend::resolveBnkPatches(const std::string& songFilename)
 {
-    std::cout << "      [resolveBnkPatches] starting..." << std::endl << std::flush;
     CProvider_Filesystem fp;
-    std::cout << "      [resolveBnkPatches] CProvider_Filesystem fp created." << std::endl << std::flush;
     // Search STAND.BNK under standard locations (identical to GybBackend)
     QString songPath = QString::fromStdString(songFilename);
     QFileInfo songInfo(songPath);
@@ -381,20 +379,15 @@ bool OkaBackend::load(const std::string& filename, const CFileProvider& fp)
 
 bool OkaBackend::load(const std::string& filename)
 {
-    std::cout << "   [OkaBackend] load starting..." << std::endl << std::flush;
     QString qf = QString::fromStdString(filename);
     QByteArray midiData = OkaFileHandler::extractMidiData(qf);
     if (midiData.isEmpty()) {
-        std::cout << "   [OkaBackend] load failed: midiData is empty" << std::endl << std::flush;
         return false;
     }
-    std::cout << "   [OkaBackend] midiData extracted." << std::endl << std::flush;
     
     if (!parseMidiData(midiData)) {
-        std::cout << "   [OkaBackend] load failed: parseMidiData failed" << std::endl << std::flush;
         return false;
     }
-    std::cout << "   [OkaBackend] parseMidiData completed." << std::endl << std::flush;
 
     // Scan for initial program change events for each channel
     for (int i = 0; i < 18; ++i) m_initialProgram[i] = -1;
@@ -415,7 +408,6 @@ bool OkaBackend::load(const std::string& filename)
     
     m_slotNames = OkaFileHandler::extractInstrumentNames(qf);
     m_instParams = OkaFileHandler::extractInstrumentParams(qf);
-    std::cout << "   [OkaBackend] slotNames extracted, count = " << m_slotNames.size() << std::endl << std::flush;
 
     // .OKA plays its own embedded instruments and nothing else - no external
     // bank, ever, whatever is registered elsewhere in the program (user
@@ -427,15 +419,12 @@ bool OkaBackend::load(const std::string& filename)
                              kEmbeddedParamLen, "[OkaBackend]", BankOrder::Nore45,
                              m_externalBankPath);
     if (loadEmbeddedPatches()) {
-        std::cout << "   [OkaBackend] using the song's embedded instruments." << std::endl << std::flush;
     } else {
-        std::cout << "   [OkaBackend] no usable instrument table - AdPlug defaults." << std::endl << std::flush;
         m_slotToInstIndex.clear();
         for (int i = 0; i < m_slotNames.size(); ++i) m_slotToInstIndex.append(-1);
     }
     
     rewind(0);
-    std::cout << "   [OkaBackend] rewind completed. returning true." << std::endl << std::flush;
     return true;
 }
 

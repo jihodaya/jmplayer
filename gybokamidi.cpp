@@ -39,11 +39,37 @@ bool isOksori(const QString& p)
 bool readSong(const QString& path, Bytes& smf,
               std::vector<jmpconv::Instrument>& instTable, QString* error)
 {
-    const std::string p = path.toStdString();
+    // Read the bytes here rather than handing jmpconv a path.
+    //
+    // Its readFile() uses std::ifstream, and on Windows a narrow path goes
+    // through the ANSI codepage - so a UTF-8 path with Korean in it does not
+    // open. Measured with the new loadall tool on its first run: of 344 .GYB
+    // files in the library, the 47 on ASCII paths converted and the 297 under
+    // Korean folder names all failed with "Not a readable GYB file", an exact
+    // 1:1 match with which paths contain non-ASCII. MIDI mode was broken for
+    // most of the library and nobody had noticed, because the songs tried by
+    // hand happened to live in D:\mt32>.
+    //
+    // QFile has no such problem, and the byte-level entry points (gybRead,
+    // okaRead) take the data directly, so nothing in convert/ has to change.
+    QFile in(path);
+    if (!in.open(QIODevice::ReadOnly)) {
+        if (error) *error = QObject::tr("Could not open the song file.");
+        return false;
+    }
+    const QByteArray fileBytes = in.readAll();
+    in.close();
+    if (fileBytes.isEmpty()) {
+        if (error) *error = QObject::tr("The song file is empty.");
+        return false;
+    }
+    const Bytes raw(reinterpret_cast<const uint8_t*>(fileBytes.constData()),
+                    reinterpret_cast<const uint8_t*>(fileBytes.constData()) +
+                        fileBytes.size());
 
     if (isGyb(path)) {
         jmpconv::GybFile g;
-        if (!jmpconv::gybReadFile(p, g)) {
+        if (!jmpconv::gybRead(raw, g)) {
             if (error) *error = QObject::tr("Not a readable GYB file.");
             return false;
         }
@@ -56,7 +82,7 @@ bool readSong(const QString& path, Bytes& smf,
 
     if (isOksori(path)) {
         jmpconv::OkaFile f;
-        if (!jmpconv::okaReadFile(p, f)) {
+        if (!jmpconv::okaRead(raw, f)) {
             if (error) *error = QObject::tr("Not a readable Oksori Music File.");
             return false;
         }

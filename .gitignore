@@ -42,3 +42,12 @@ release_eng/
 build_local_full.bat
 NukedSC55/
 temp/
+
+# Corpus test tools (run_tests.bat). The sources in tests/ are committed; the
+# build output and the baselines are not - baselines are paths and hashes from a
+# song library that is not public, and would be thousands of lines.
+build_tests/
+build_tests_*.log
+tests/baseline-*.txt
+tests/baseline-*.txt.prev
+wav_out/

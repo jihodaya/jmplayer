@@ -294,6 +294,83 @@ if(ENGLISH_UI)
     message(STATUS "ENGLISH_UI = ON  (English player UI build)")
 endif()
 
+# Corpus test tools. OFF by default, so build_release.bat is untouched and
+# nothing here can reach release/ - these are separate executables with their own
+# main(), not part of the player. run_tests.bat builds them into build_tests/.
+#
+# They exist because this project's real test material is the owner's library of
+# 130,000 song files, which cannot be redistributed, so there is no CI to run
+# them in: the check has to be a local tool someone runs deliberately.
+option(BUILD_TESTS "Build the corpus test tools (loadall, ...)" OFF)
+if(BUILD_TESTS)
+    add_executable(loadall
+        tests/loadall.cpp
+        gybbackend.cpp
+        okabackend.cpp
+        bnkfill.cpp
+        nobfilehandler.cpp
+        okafilehandler.cpp
+        gybfilehandler.cpp
+        gybokamidi.cpp
+        mt32map.cpp
+        settingsmanager.cpp
+        convert/gyb.cpp
+        convert/oksori.cpp
+        convert/smf.cpp
+        convert/gmmap.cpp
+        convert/oplbank.cpp
+    )
+    target_link_libraries(loadall PRIVATE Qt6::Core adplug)
+    target_include_directories(loadall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Renders through the real players, so it links what they need. Qt6::Gui is
+    # in there because ImsPlayer reaches into the piano-roll types; no window is
+    # created and no audio device is opened - the players' renderAudio() is
+    # independent of miniaudio, which is what makes this testable at all.
+    add_executable(render
+        tests/render.cpp
+        gybplayer.cpp gybbackend.cpp
+        okaplayer.cpp okabackend.cpp
+        imsplayer.cpp
+        bnkfill.cpp
+        gybfilehandler.cpp
+        okafilehandler.cpp
+        issfilehandler.cpp
+        settingsmanager.cpp
+        opltunnelsender.cpp
+        # InterceptingOpl asks JJoMeSynth for the tunnel state. Linking it in
+        # does not start anything: the singleton only opens a device in
+        # initialize(), which nothing here calls.
+        jjomesynth.cpp
+    )
+    target_link_libraries(render PRIVATE Qt6::Core Qt6::Gui Qt6::Multimedia adplug winmm)
+    target_include_directories(render PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Rubbish into every value that comes from outside the program. Needs only
+    # the sidecar and conversion code, so it is the quickest of the three to
+    # build and the one worth running most often.
+    add_executable(inputs
+        tests/inputs.cpp
+        gybokamidi.cpp
+        mt32map.cpp
+        settingsmanager.cpp
+        convert/gyb.cpp
+        convert/oksori.cpp
+        convert/smf.cpp
+        convert/gmmap.cpp
+        convert/oplbank.cpp
+    )
+    target_link_libraries(inputs PRIVATE Qt6::Core adplug)
+    target_include_directories(inputs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    foreach(t loadall render inputs)
+        if(ENGLISH_UI)
+            target_compile_definitions(${t} PRIVATE ENGLISH_UI)
+        endif()
+    endforeach()
+    message(STATUS "BUILD_TESTS = ON  (corpus test tools)")
+endif()
+
 # Windows specific
 if(WIN32)
     # set_target_properties(${PROJECT_NAME} PROPERTIES

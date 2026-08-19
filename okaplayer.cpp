@@ -362,19 +362,16 @@ bool OkaPlayer::loadFile(const QString& fileName)
     // toUtf8, not encodeName - see the matching note in GybPlayer::loadFile.
     // OkaBackend::load reads this back with QString::fromStdString (UTF-8).
     QByteArray fbytes = fileName.toUtf8();
-    std::cout << "[OkaPlayer] Calling backend->load..." << std::endl << std::flush;
     if (!m_backend->load(fbytes.constData())) {
         delete m_backend; m_backend = nullptr;
         delete m_opl;     m_opl     = nullptr;
         return false;
     }
-    std::cout << "[OkaPlayer] Backend load succeeded." << std::endl << std::flush;
 
     // Pre-scan to calculate wall-clock duration
     // OPL tunnel: this scan runs the WHOLE SONG through the REAL m_opl -
     // suppress the wire (see GybPlayer::loadFile), unsuppress after the final
     // rewind so the resync snapshot ships the clean song-start state.
-    std::cout << "[OkaPlayer] Starting pre-scan..." << std::endl << std::flush;
     OplTunnelSender::instance().setSuppressed(true);
     m_backend->rewind(0);
     unsigned long totalTicks = 0;
@@ -389,7 +386,6 @@ bool OkaPlayer::loadFile(const QString& fileName)
     m_duration = (unsigned long)totalMs;
     m_backend->rewind(0);
     OplTunnelSender::instance().setSuppressed(false);
-    std::cout << "[OkaPlayer] Pre-scan done: ticks=" << totalTicks << " dur=" << m_duration << "ms" << std::endl << std::flush;
 
     m_title    = m_backend->title();
     m_bankName = m_backend->bankName();
@@ -436,7 +432,6 @@ bool OkaPlayer::loadFile(const QString& fileName)
     memset(m_cachedVoiceVols, 0, sizeof(m_cachedVoiceVols));
     memset(m_cachedVoiceKeyOn, 0, sizeof(m_cachedVoiceKeyOn));
 
-    std::cout << "[OkaPlayer] loadFile complete: title='" << m_title.toStdString() << "'" << std::endl << std::flush;
 
     return true;
 }

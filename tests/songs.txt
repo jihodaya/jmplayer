@@ -1,0 +1,22 @@
+# Songs rendered by tests/render.cpp. Paths are absolute, or relative to this
+# file. Chosen to cover every OPL engine and the cases that have actually broken
+# before, not to be a broad sample - a regression shows up in one song as
+# readily as in fifty, and each one costs render time.
+#
+# GYB - the format most of the reverse-engineering work went into.
+D:/mt32/76/SOVIRGIN.GYB
+D:/mt32/76/ZEL#3.GYB
+D:/mt32/76/THDRFOS1.GYB
+D:/mt32/76/SILPHED1.GYB
+D:/mt32/76/SHINOBI.GYB
+D:/mt32/76/BEYOND.GYB
+D:/mt32/76/MIDNIGHT.GYB
+D:/mt32/76/MONACO.GYB
+
+# OKA - shares GAYOBANG's driver, and carries the same corrections.
+D:/mt32/76/SOVIRGIN.OKA
+D:/mt32/76/BEYOND.OKA
+
+# IMS / ROL / SOP - AdPlug's own players, which must be left alone.
+D:/mt32/IMS/ani/AMG01.IMS
+D:/mt32/IMS/ani/AMG04.IMS
