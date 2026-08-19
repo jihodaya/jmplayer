@@ -177,7 +177,7 @@ Result loadMidi(const QString& path)
     return r;
 }
 
-// The MIDI path added in R2.7b. Reported separately from the OPL load of the
+// The MIDI path, first released in R2.7c. Reported separately from the OPL load of the
 // same file, because they are different code and either can break alone.
 Result buildMidiFromOpl(const QString& path)
 {
