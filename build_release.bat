@@ -21,7 +21,7 @@ set RELEASE_DIR=%SCRIPT_DIR%release
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player R2.7d
+echo JJoMe MIDI Player V3.0.0 beta
 echo License-Compliant Build Script
 echo ========================================
 echo.
@@ -78,11 +78,21 @@ REM pasted straight in makes CMakeRCCompiler.cmake fail to parse on the next run
 set "QT_DIR_FS=%QT_DIR:\=/%"
 set "MINGW_DIR_FS=%MINGW_DIR:\=/%"
 
+REM munt (libmt32emu), for the MT-32 engine. A local checkout is used when it is
+REM there so an ordinary build needs no network; CMake clones it otherwise.
+if not defined MUNT_DIR set "MUNT_DIR=%SCRIPT_DIR%..\src\munt"
+if exist "%MUNT_DIR%\mt32emu\CMakeLists.txt" (
+    set "MUNT_DIR_FS=%MUNT_DIR:\=/%"
+) else (
+    set "MUNT_DIR_FS="
+)
+
 cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ^
       -DCMAKE_C_COMPILER="%MINGW_DIR_FS%/bin/gcc.exe" ^
       -DCMAKE_CXX_COMPILER="%MINGW_DIR_FS%/bin/g++.exe" ^
       -DCMAKE_RC_COMPILER="%MINGW_DIR_FS%/bin/windres.exe" ^
-      -DCMAKE_PREFIX_PATH="%QT_DIR_FS%" "%SRC_DIR%"
+      -DCMAKE_PREFIX_PATH="%QT_DIR_FS%" ^
+      -DFETCHCONTENT_SOURCE_DIR_MUNT="%MUNT_DIR_FS%" "%SRC_DIR%"
 
 if errorlevel 1 (
     echo.
@@ -137,7 +147,7 @@ if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
 )
 
 echo [5/5] Creating directory structure for release...
-copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_R2.7d.exe"
+copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe"
 copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
 if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
 if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
@@ -148,6 +158,15 @@ REM reached a release. ASCII names now, for the same reason kernel images use
 REM them: a name that survives every tool in the chain.
 if exist "%SRC_DIR%\etc\JMPlayer_Manual_KO.pdf" copy "%SRC_DIR%\etc\JMPlayer_Manual_KO.pdf" "%RELEASE_DIR%\" > nul
 if exist "%SRC_DIR%\etc\JMPlayer_Manual_EN.pdf" copy "%SRC_DIR%\etc\JMPlayer_Manual_EN.pdf" "%RELEASE_DIR%\" > nul
+
+REM libmt32emu, the MT-32 engine. Unlike Nuked-SC55 this one DOES ship: it is
+REM LGPL-2.1, so a public-domain program may link it dynamically and pass it on.
+REM Only the ROMs are missing, and those are Roland's.
+for %%D in (libmt32emu-2.dll libmt32emu.dll) do (
+    if exist "%BUILD_DIR%\_deps\munt-build\%%D" copy "%BUILD_DIR%\_deps\munt-build\%%D" "%RELEASE_DIR%\\" > nul
+)
+if not exist "%RELEASE_DIR%\MT32ROMs" mkdir "%RELEASE_DIR%\MT32ROMs"
+copy "%SCRIPT_DIR%\MT32ROMs_README.txt" "%RELEASE_DIR%\MT32ROMs\읽어보세요.txt" > nul
 
 REM Nuked-SC55 drop folder. The emulator itself is NOT shipped - it is not
 REM public domain and jmp is - so only the folder and its note go out.
@@ -167,7 +186,7 @@ echo.
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
 cd /d "%RELEASE_DIR%"
-windeployqt JMPlayer_R2.7d.exe --release --no-translations --no-opengl-sw
+windeployqt JMPlayer_V3.0.0-beta.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
@@ -184,11 +203,11 @@ echo BUILD COMPLETED SUCCESSFULLY!
 echo ========================================
 echo.
 echo Release folder: %RELEASE_DIR%\
-echo Executable: %RELEASE_DIR%\JMPlayer_R2.7d.exe
+echo Executable: %RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe
 echo.
 
-if exist "%RELEASE_DIR%\JMPlayer_R2.7d.exe" (
-    for %%A in ("%RELEASE_DIR%\JMPlayer_R2.7d.exe") do (
+if exist "%RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe" (
+    for %%A in ("%RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe") do (
         echo Executable size: %%~zA bytes
     )
 )

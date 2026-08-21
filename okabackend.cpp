@@ -415,6 +415,12 @@ bool OkaBackend::load(const std::string& filename)
     // way GAYOBANG does, but .OKA sounds right on the embedded table as it is,
     // so we deliberately do not follow it here. A file with no usable table
     // falls through to AdPlug's default instrument rather than to a bank.
+    // NORE45's own bank first, GAYOBANG's second. Switching .OKA to GAYO-first
+    // to match .GYB was tried on 2026-08-21 and reverted: measured over the
+    // whole library it changes 20 .OKA files - none of which has a .GYB twin -
+    // and leaves all 28 paired songs bit-identical, because those .OKA files
+    // carry their instruments embedded and read no bank at all. It cannot be
+    // what makes a .GYB and its .OKA sound different.
     fillEmptyInstrumentSlots(m_slotNames, m_instParams, qf,
                              kEmbeddedParamLen, "[OkaBackend]", BankOrder::Nore45,
                              m_externalBankPath);

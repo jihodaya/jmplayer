@@ -198,10 +198,22 @@ Result buildMidiFromOpl(const QString& path)
 // The loaders are chatty - GybBackend and OkaBackend narrate every rewind - and
 // 14,000 files of that buries the failures this tool exists to show. Warnings
 // and above still come through.
+// Debug output is dropped unless JMP_DEBUG is set in the environment.
+//
+// The players say useful things through qDebug - which bank filled a name-only
+// instrument slot, for one - and that is exactly what is wanted when chasing
+// why two versions of the same song sound different. It stays off by default
+// because a library walk of 14,000 files would otherwise bury the result.
+static bool debugWanted()
+{
+    static const bool on = !qEnvironmentVariableIsEmpty("JMP_DEBUG");
+    return on;
+}
+
 static void quietHandler(QtMsgType type, const QMessageLogContext& ctx,
                          const QString& msg)
 {
-    if (type == QtDebugMsg || type == QtInfoMsg) return;
+    if ((type == QtDebugMsg || type == QtInfoMsg) && !debugWanted()) return;
     QByteArray local = msg.toLocal8Bit();
     std::cerr << local.constData() << std::endl;
     (void)ctx;

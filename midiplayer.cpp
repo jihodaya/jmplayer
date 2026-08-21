@@ -3,6 +3,7 @@
 #include "nobfilehandler.h"
 #include "okafilehandler.h"
 #include "opltunnelsender.h" // to stay off the wire while the OPL tunnel owns it
+#include "settingsmanager.h"
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
@@ -70,6 +71,16 @@ MidiPlayer::~MidiPlayer()
         playbackThread->wait();
         delete playbackThread;
     }
+
+    // Sc55Bridge is a QObject child and goes with the parent; the MT-32 engine
+    // is not, so it is deleted here. disconnect() has already unpublished it
+    // from the audio callback.
+    if (m_pMt32) {
+        JJoMeSynth::instance().setMt32Synth(nullptr);
+        delete m_pMt32;
+        m_pMt32 = nullptr;
+    }
+
     timeEndPeriod(1);
 }
 
@@ -192,6 +203,54 @@ bool MidiPlayer::connectToSc55()
     return true;
 }
 
+// MT-32 / CM-32L through munt. Nothing is launched and nothing is connected to:
+// the emulator is a library in this process, so "connecting" means loading a
+// ROM set and telling JJoMeSynth to render it.
+//
+// The audio device has to be up for anything to be heard, and it belongs to
+// JJoMeSynth. It is opened with an empty SoundFont path on purpose - this
+// engine makes its own sound, and a machine with no .sf2 at all is still
+// entitled to play MT-32 files.
+bool MidiPlayer::connectToMt32()
+{
+    if (connected)
+        disconnect(false);
+
+    if (!m_pMt32)
+        m_pMt32 = new Mt32Synth();
+
+    const QString saved = SettingsManager::instance().value("Mt32/RomSet", "").toString();
+    if (!m_pMt32->Open(saved)) {
+        qWarning() << "[MidiPlayer] MT-32 failed to open:" << m_pMt32->ErrorString();
+        return false;
+    }
+
+    if (!JJoMeSynth::instance().isInitialized()) {
+        if (!JJoMeSynth::instance().initialize(QString())) {
+            qWarning() << "[MidiPlayer] MT-32: no audio device";
+            m_pMt32->Close();
+            return false;
+        }
+    }
+
+    // Published last, so the audio callback never sees a half-built synth.
+    JJoMeSynth::instance().setMt32Synth(m_pMt32);
+
+    m_useInternalSynth = false;
+    m_bUseMt32 = true;
+    connected  = true;
+
+    for (int channel = 0; channel < 16; channel++)
+        originalChannelVolumes[channel] = 100;
+
+    // Start the panel in agreement with the slider rather than at the
+    // machine's power-on default.
+    m_pMt32->SetMasterVolume(currentVolume);
+
+    qDebug() << "[MidiPlayer] Connected to the MT-32 engine:" << m_pMt32->CurrentRomLabel();
+    return true;
+}
+
 bool MidiPlayer::connectToDeviceByName(const QString& deviceName)
 {
     // Look the device up by name in the CURRENT enumeration instead of trusting
@@ -227,6 +286,19 @@ void MidiPlayer::disconnect(bool async)
         }
         m_pSc55->Stop();
         m_bUseSc55 = false;
+        connected = false;
+        return;
+    }
+
+    // Same shape for the MT-32, and for the same reason: no WinMM handle to
+    // clean up. Unpublish it from the audio callback BEFORE closing, or the
+    // render thread can be inside Render() while the synth goes away.
+    if (m_bUseMt32 && m_pMt32) {
+        if (connected)
+            m_pMt32->AllSoundOff();
+        JJoMeSynth::instance().setMt32Synth(nullptr);
+        m_pMt32->Close();
+        m_bUseMt32 = false;
         connected = false;
         return;
     }
@@ -319,7 +391,8 @@ bool MidiPlayer::loadMidiFile(const QString &filename)
     if (gybokamidi::isSupported(filename)) {
         QString err;
         QByteArray midiData = gybokamidi::toMidi(
-            filename, gybokamidi::buildPlan(filename), &err);
+            filename, gybokamidi::buildPlan(filename), &err,
+            gybokamidi::targetModule(filename));
         if (midiData.isEmpty()) {
             qWarning() << "[MidiPlayer] MIDI build failed for" << filename << err;
             emit errorOccurred(err.isEmpty() ? QString("Could not build MIDI") : err);
@@ -551,7 +624,7 @@ void MidiPlayer::setVolume(int volume)
 
     // m_bUseSc55 included: the emulator has no hMidiOut, so it used to be left
     // out of the volume update entirely and the slider did nothing (2026-07-29).
-    if (connected && (hMidiOut || m_useInternalSynth || m_bUseSc55)) {
+    if (connected && (hMidiOut || m_useInternalSynth || m_bUseSc55 || m_bUseMt32)) {
         // Restart timer - this will delay the actual update until user stops moving slider
         locker.unlock(); // unlock before QTimer operation (QTimer must run on GUI thread)
         volumeUpdateTimer->start();
@@ -1401,6 +1474,15 @@ void MidiPlayer::sendMidiMessage(unsigned char status, unsigned char data1, unsi
         return;
     }
 
+    // MT-32: straight into the library. mt32emu's queueing playMsg needs no
+    // synchronisation with the rendering thread, so this can be called from
+    // here without a handshake.
+    if (m_bUseMt32 && m_pMt32) {
+        if (connected)
+            m_pMt32->SendShort(status, data1, data2);
+        return;
+    }
+
     if (!connected || !hMidiOut) return;
 
     DWORD message = status | (data1 << 8) | (data2 << 16);
@@ -1447,6 +1529,15 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
         return;
     }
 
+    // MT-32: SysEx is how these files do most of their work - custom timbres,
+    // part assignments, the display banner - so this path matters more here
+    // than anywhere else. The bytes are already framed F0..F7, which is what
+    // playSysex expects.
+    if (m_bUseMt32 && m_pMt32) {
+        m_pMt32->SendSysEx(sysExMessage);
+        return;
+    }
+
     // 내부 신스 모드에서는 hMidiOut이 nullptr이므로 SysEx를 보낼 수 없음
     if (m_useInternalSynth || !hMidiOut) return;
 
@@ -1485,7 +1576,19 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
 void MidiPlayer::updateVolumeToDevice()
 {
     QMutexLocker locker(&stateMutex);
-    if (!connected || (!hMidiOut && !m_useInternalSynth && !m_bUseSc55)) return;
+    if (!connected || (!hMidiOut && !m_useInternalSynth && !m_bUseSc55 && !m_bUseMt32)) return;
+
+    // The MT-32 has a front-panel MASTER VOLUME and shows it on its display, so
+    // that is what the slider drives. Scaling the sixteen CC#7s the way the
+    // loop below does would fight whatever the song sets AND leave the panel
+    // reading a number the user never chose (reported 2026-08-21: the display
+    // said 98 while the slider said something else).
+    if (m_bUseMt32 && m_pMt32) {
+        const int vol = currentVolume;
+        locker.unlock();
+        m_pMt32->SetMasterVolume(vol);
+        return;
+    }
 
     // While the OPL register tunnel is running, the MIDI port IS the tunnel's
     // link (jmp -> Pico -> mt32-pi, one 31250 baud wire). Blasting 16 CC#7

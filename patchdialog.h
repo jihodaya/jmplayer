@@ -51,10 +51,12 @@ private slots:
     void revertRow(int row);
     void revertAll();
     void onlyUnmatchedToggled(bool on);
+    void setTarget(gybokamidi::Target target);
 
 private:
     void buildTable();
     void fillTargetCombo(int row);
+    void updateTargetButton();
     void refreshRow(int row);
     void applyFilter();
 
@@ -66,6 +68,20 @@ private:
     QPushButton*             m_saveButton = nullptr;
     QPushButton*             m_revertAll = nullptr;
     QLabel*                  m_hint = nullptr;
+
+    // GM or MT-32. Switching rebuilds every instrument list, because the two
+    // are different sets of instruments rather than two namings of one - see
+    // gybokamidi.h. Both choices are kept per row, so flipping back and forth
+    // loses nothing.
+    //
+    // Two buttons rather than one that changes its label: a single toggle never
+    // says whether it is showing the current state or the thing it would switch
+    // to. With both on screen the choice is visible and only the active one is
+    // coloured.
+    QPushButton*             m_gmButton = nullptr;
+    QPushButton*             m_mt32Button = nullptr;
+    gybokamidi::Target       m_target = gybokamidi::Target::Gm;
+
     bool                     m_building = false;
     bool                     m_saved = false;
 };

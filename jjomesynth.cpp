@@ -6,6 +6,7 @@
 #include "imsplayer.h"
 #include "gybplayer.h"
 #include "okaplayer.h"
+#include "mt32synth.h"
 #include "settingsmanager.h"
 #include "opltunnelsender.h"
 
@@ -86,27 +87,37 @@ bool JJoMeSynth::initialize(const QString& soundFontPath) {
             qWarning() << "tsf_load failed to parse SoundFont.";
         }
     } else {
-        qWarning() << "Failed to open SoundFont file:" << soundFontPath;
+        // An empty path is a request for the device alone (see below), not a
+        // failure worth warning about.
+        if (!soundFontPath.isEmpty())
+            qWarning() << "Failed to open SoundFont file:" << soundFontPath;
         m_tsf = nullptr;
     }
 #else
     m_tsf = tsf_load_filename(soundFontPath.toUtf8().constData());
 #endif
 
-    if (!m_tsf) {
+    // An empty path means "open the device, no SoundFont".
+    //
+    // The MT-32 engine renders its own audio but still needs this device to
+    // play it through, and a machine that has no .sf2 installed at all is
+    // perfectly entitled to use it. Failing here would leave that user with a
+    // working emulator and silence. Callers that do want a SoundFont still get
+    // the old behaviour: a non-empty path that will not load is an error.
+    if (!m_tsf && !soundFontPath.isEmpty()) {
         qWarning() << "Failed to load SoundFont:" << soundFontPath;
         return false;
     }
 
     // Set output mode to Stereo, Interleaved, 49716Hz
-    tsf_set_output(m_tsf, TSF_STEREO_INTERLEAVED, 49716, 0);
+    if (m_tsf)
+        tsf_set_output(m_tsf, TSF_STEREO_INTERLEAVED, 49716, 0);
 
     // Initialize miniaudio
     m_context = new ma_context;
     if (ma_context_init(NULL, 0, NULL, m_context) != MA_SUCCESS) {
         qWarning() << "Failed to initialize miniaudio context.";
-        tsf_close(m_tsf);
-        m_tsf = nullptr;
+        if (m_tsf) { tsf_close(m_tsf); m_tsf = nullptr; }
         delete m_context;
         m_context = nullptr;
         return false;
@@ -145,8 +156,7 @@ bool JJoMeSynth::initialize(const QString& soundFontPath) {
         delete m_device;
         m_context = nullptr;
         m_device = nullptr;
-        tsf_close(m_tsf);
-        m_tsf = nullptr;
+        if (m_tsf) { tsf_close(m_tsf); m_tsf = nullptr; }
         return false;
     }
 
@@ -209,6 +219,10 @@ void JJoMeSynth::setOkaPlayer(OkaPlayer* player) {
     m_okaPlayer.store(player, std::memory_order_release);
 }
 
+void JJoMeSynth::setMt32Synth(Mt32Synth* synth) {
+    m_mt32Synth.store(synth, std::memory_order_release);
+}
+
 void JJoMeSynth::pushEvent(const SynthEvent& ev) {
     int currentTail = m_eventTail.load(std::memory_order_relaxed);
     int nextTail = (currentTail + 1) % EVENT_QUEUE_SIZE;
@@ -261,11 +275,25 @@ void JJoMeSynth::renderAudio(void* output, unsigned int frameCount) {
     GybPlayer* gyb = m_gybPlayer.load(std::memory_order_acquire);
     ImsPlayer* ims = m_imsPlayer.load(std::memory_order_acquire);
     OkaPlayer* oka = m_okaPlayer.load(std::memory_order_acquire);
+    Mt32Synth* mt32 = m_mt32Synth.load(std::memory_order_acquire);
     tsf* soundfont = m_tsf; // Assuming m_tsf is only changed during shutdown/init
 
     // Process queued MIDI events first
     processEvents();
 
+    // Order matters, and it is not "most important first".
+    //
+    // The OPL players are a SOURCE; the MT-32 is a DESTINATION. They are not
+    // alternatives competing for the same job: a .GYB playing through the OPL
+    // engine makes its own sound and never touches the MIDI path, so it has to
+    // win no matter which MIDI device happens to be selected. The MT-32 is only
+    // the source when no OPL player is loaded - which is exactly the case where
+    // a song is going out as MIDI, and is also what makes the same .GYB in MIDI
+    // mode land here instead.
+    //
+    // Putting the MT-32 first, as this did when it was added, silences every
+    // OPL song for anyone who has the MT-32 selected (reported 2026-08-21).
+    // stop() clears the OPL pointers, so nothing lingers to block it afterwards.
     if (gyb) {
         bool playing = gyb->isPlaying();
         if (playing) {
@@ -290,6 +318,12 @@ void JJoMeSynth::renderAudio(void* output, unsigned int frameCount) {
         } else {
             memset(output, 0, frameCount * 2 * sizeof(float));
         }
+    } else if (mt32) {
+        // No "not playing" branch, unlike the OPL players above: the MT-32
+        // renders its own silence, and that silence includes the release tail
+        // of whatever was sounding when the song stopped. Cutting it off with a
+        // memset would clip the end of every note.
+        mt32->Render(static_cast<float*>(output), frameCount);
     } else if (soundfont) {
         float* fOutput = static_cast<float*>(output);
         tsf_render_float(soundfont, fOutput, frameCount, 0);

@@ -84,11 +84,39 @@ PatchDialog::PatchDialog(const QString& songPath,
     m_revertAll->setEnabled(false);
     connect(m_revertAll, &QPushButton::clicked, this, &PatchDialog::revertAll);
 
+    // Which module the list is for. Read before the table is built, since every
+    // instrument combo depends on it.
+    m_target = gybokamidi::targetModule(songPath);
+
+    const QString targetTip =
+        LSTR(u8"악기 목록을 GM과 MT-32 중 어느 쪽으로 보여줄지 고릅니다.\n"
+             u8"곡 파일이 갖고 있던 음색 번호는 원래 MT-32 번호입니다.",
+             u8"Whether the instrument lists are General MIDI or MT-32.\n"
+             u8"The tone numbers these song files carry are MT-32 numbers.");
+
+    m_gmButton = new QPushButton(QStringLiteral("GM"), this);
+    m_mt32Button = new QPushButton(QStringLiteral("MT-32"), this);
+    for (QPushButton* b : { m_gmButton, m_mt32Button }) {
+        b->setCheckable(true);
+        b->setAutoExclusive(false);   // set together in updateTargetButton()
+        b->setToolTip(targetTip);
+        b->setFocusPolicy(Qt::NoFocus);
+    }
+    connect(m_gmButton, &QPushButton::clicked, this,
+            [this] { setTarget(gybokamidi::Target::Gm); });
+    connect(m_mt32Button, &QPushButton::clicked, this,
+            [this] { setTarget(gybokamidi::Target::Mt32); });
+
     QHBoxLayout* topRow = new QHBoxLayout();
     topRow->addWidget(m_onlyUnmatched);
     topRow->addStretch();
+    topRow->addWidget(m_gmButton);
+    topRow->addWidget(m_mt32Button);
+    topRow->addSpacing(12);
     topRow->addWidget(m_revertAll);
     layout->addLayout(topRow);
+
+    updateTargetButton();
 
     m_table = new QTableWidget(this);
     layout->addWidget(m_table, 1);
@@ -224,6 +252,28 @@ void PatchDialog::fillTargetCombo(int row)
     c->clear();
     const gybokamidi::Row& r = m_plan[row];
 
+    // MT-32 mode lists that machine's 128 tones instead of the GM set. They are
+    // different instruments, not different names for the same ones - `Fantasy`,
+    // `Doctor Solo` and `Jungle Tune` exist nowhere else - so the list has to
+    // change with the target or the numbers mean nothing.
+    //
+    // Percussion still uses the GM drum list. The MT-32's rhythm part has its
+    // own note layout, but it is close enough to GM at the notes these songs
+    // actually use, and inventing a second drum table from nothing would be a
+    // guess where this one is measured.
+    if (m_target == gybokamidi::Target::Mt32 && !r.drum) {
+        for (int t = 1; t <= 128; ++t) {
+            c->addItem(QString("%1  %2")
+                           .arg(t, 3)
+                           .arg(QString::fromLatin1(mt32map::toneName(t))),
+                       t);
+        }
+        int idx = c->findData(r.mt32Program);
+        c->setCurrentIndex(idx >= 0 ? idx : 0);
+        m_building = wasBuilding;
+        return;
+    }
+
     if (r.drum) {
         for (int note : jmpconv::gmDrumNotes()) {
             c->addItem(QString("%1  (%2)")
@@ -321,8 +371,12 @@ void PatchDialog::onTargetChanged(int row, int index)
     if (!c || index < 0) return;
 
     const int value = c->itemData(index).toInt();
-    if (m_plan[row].drum) m_plan[row].drumNote = value;
-    else                  m_plan[row].program  = value;
+    if (m_plan[row].drum)
+        m_plan[row].drumNote = value;
+    else if (m_target == gybokamidi::Target::Mt32)
+        m_plan[row].mt32Program = value;      // 1..128
+    else
+        m_plan[row].program = value;
 
     refreshRow(row);
     emit assignmentChanged(m_plan[row].slot, m_plan[row]);
@@ -336,6 +390,7 @@ void PatchDialog::revertRow(int row)
     r.program  = r.baseProgram;
     r.bankMsb  = r.baseBankMsb;
     r.drumNote = r.baseDrumNote;
+    r.mt32Program = r.baseMt32Program;
     r.origin   = r.baseOrigin;
 
     QComboBox* type = qobject_cast<QComboBox*>(m_table->cellWidget(row, ColType));
@@ -359,6 +414,54 @@ void PatchDialog::revertAll()
 }
 
 void PatchDialog::onlyUnmatchedToggled(bool) { applyFilter(); }
+
+void PatchDialog::setTarget(gybokamidi::Target target)
+{
+    if (target == m_target) {
+        updateTargetButton();   // a click on the one already active: just redraw
+        return;
+    }
+
+    m_target = target;
+    gybokamidi::setTargetModule(m_songPath, m_target);
+    updateTargetButton();
+
+    // Every melodic list is now the wrong set, and every melodic row is now
+    // playing a different instrument. Rebuild the lists, then re-announce each
+    // row so the sound follows the switch the way a single edit does.
+    m_building = true;
+    for (int i = 0; i < m_plan.size(); ++i)
+        fillTargetCombo(i);
+    m_building = false;
+
+    for (int i = 0; i < m_plan.size(); ++i) {
+        refreshRow(i);
+        emit assignmentChanged(m_plan[i].slot, m_plan[i]);
+    }
+}
+
+void PatchDialog::updateTargetButton()
+{
+    if (!m_gmButton || !m_mt32Button) return;
+
+    const bool mt32 = (m_target == gybokamidi::Target::Mt32);
+    m_gmButton->setChecked(!mt32);
+    m_mt32Button->setChecked(mt32);
+
+    // Only the active one is coloured, in jmp's accent. A checked QPushButton
+    // is drawn as merely "pressed" by the default style, which next to an
+    // unchecked one of the same size is easy to miss.
+    const char* kActive =
+        "QPushButton { background-color: #0078d4; color: white;"
+        " border: 1px solid #0078d4; border-radius: 3px; padding: 4px 14px; }";
+    const char* kIdle =
+        "QPushButton { background-color: #3a3a3a; color: #b0b0b0;"
+        " border: 1px solid #555555; border-radius: 3px; padding: 4px 14px; }"
+        "QPushButton:hover { background-color: #4a4a4a; color: white; }";
+
+    m_gmButton->setStyleSheet(QString::fromLatin1(mt32 ? kIdle : kActive));
+    m_mt32Button->setStyleSheet(QString::fromLatin1(mt32 ? kActive : kIdle));
+}
 
 void PatchDialog::applyFilter()
 {

@@ -37,6 +37,31 @@ set(BUILD_ADPLAY OFF CACHE BOOL "" FORCE)
 set(BUILD_ADPLUG_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(adplug)
 
+# 3. munt (libmt32emu) - Roland MT-32 / CM-32L emulation.
+#
+# Only the library is taken, not the repository's Qt front-end or its Windows
+# MIDI driver: the library is LGPL-2.1 and can ship as a DLL beside jmp, while
+# those two are GPL-3.0 and would take jmp's licence with them. SOURCE_SUBDIR
+# is what keeps the rest of the tree out of the build.
+#
+# Shared on purpose. Dynamic linking is what lets a public-domain program use
+# an LGPL library, and it is the same arrangement Qt and adplug are in here.
+#
+# A local checkout can be used instead of cloning by setting
+# FETCHCONTENT_SOURCE_DIR_MUNT - the build scripts do this so an ordinary build
+# needs no network.
+FetchContent_Declare(
+    munt
+    GIT_REPOSITORY https://github.com/munt/munt.git
+    GIT_TAG master
+    SOURCE_SUBDIR mt32emu
+)
+set(libmt32emu_SHARED TRUE CACHE BOOL "" FORCE)
+set(libmt32emu_C_INTERFACE TRUE CACHE BOOL "" FORCE)
+set(libmt32emu_CPP_INTERFACE TRUE CACHE BOOL "" FORCE)
+set(libmt32emu_WITH_VERSION_TAGGING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(munt)
+
 # Patch adplug's mus.h and mus.cpp to expose current_inst and instrument getter
 set(MUS_H_PATH "${adplug_SOURCE_DIR}/src/mus.h")
 set(MUS_CPP_PATH "${adplug_SOURCE_DIR}/src/mus.cpp")
@@ -195,6 +220,10 @@ set(SOURCES
     midireset.cpp
     midiresetdialog.cpp
     sc55bridge.cpp
+    mt32synth.cpp
+    mt32display.cpp
+    windowplacement.cpp
+    slowlog.cpp
     mt32map.cpp
     gybokamidi.cpp
     patchdialog.cpp
@@ -244,6 +273,10 @@ set(HEADERS
     mt32map.h
     gybokamidi.h
     patchdialog.h
+    mt32synth.h
+    mt32display.h
+    windowplacement.h
+    slowlog.h
 
     convert/byteio.h
     convert/song.h
@@ -281,9 +314,11 @@ target_link_libraries(${PROJECT_NAME}
     Qt6::Multimedia
     Qt6::Network
     adplug
+    mt32emu   # MT-32 / CM-32L emulation, LGPL, linked as a DLL - see mt32synth.h
     winmm
     dwmapi
     dbghelp   # crash log: symbol lookup for the unhandled-exception filter
+    avrt      # MMCSS for the SC-55 pipe sender thread - see sc55bridge.cpp
 )
 
 # English UI build: pass -DENGLISH_UI=ON to build all player UI text in English.
@@ -323,6 +358,30 @@ if(BUILD_TESTS)
     target_link_libraries(loadall PRIVATE Qt6::Core adplug)
     target_include_directories(loadall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # The MT-32 engine with no window and no audio device. Mt32Synth renders
+    # into a buffer the caller supplies, which is what makes this possible -
+    # the same property that lets the OPL players be tested.
+    add_executable(mt32
+        tests/mt32.cpp
+        mt32synth.cpp
+        settingsmanager.cpp
+    )
+    target_link_libraries(mt32 PRIVATE Qt6::Core Qt6::Widgets mt32emu)
+    target_include_directories(mt32 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # The panel itself. Needs a window, so unlike the rest of these it cannot be
+    # called headless - but a popup is not testable any other way, and the bug
+    # it exists for came from exactly that kind of widget behaviour.
+    add_executable(mt32ui
+        tests/mt32ui.cpp
+        mt32display.cpp
+        mt32synth.cpp
+        windowplacement.cpp
+        settingsmanager.cpp
+    )
+    target_link_libraries(mt32ui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets mt32emu)
+    target_include_directories(mt32ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
     # Renders through the real players, so it links what they need. Qt6::Gui is
     # in there because ImsPlayer reaches into the piano-roll types; no window is
     # created and no audio device is opened - the players' renderAudio() is
@@ -342,8 +401,9 @@ if(BUILD_TESTS)
         # does not start anything: the singleton only opens a device in
         # initialize(), which nothing here calls.
         jjomesynth.cpp
+        mt32synth.cpp   # JJoMeSynth renders through it; nothing opens unless asked
     )
-    target_link_libraries(render PRIVATE Qt6::Core Qt6::Gui Qt6::Multimedia adplug winmm)
+    target_link_libraries(render PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu winmm)
     target_include_directories(render PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # Rubbish into every value that comes from outside the program. Needs only
@@ -376,6 +436,10 @@ if(BUILD_TESTS)
         mt32map.cpp
         settingsmanager.cpp
         sc55bridge.cpp
+        # MidiPlayer and JJoMeSynth both call into the MT-32 engine, so it comes
+        # along whether or not a test touches it. Nothing is opened: Mt32Synth
+        # does no work until Open() is called.
+        mt32synth.cpp
         midireset.cpp
         # JJoMeSynth is the host that drives the OPL players, so linking it
         # brings them along. Nothing starts: no device is opened and no player
@@ -395,15 +459,28 @@ if(BUILD_TESTS)
     )
     # Qt6::Widgets is here only because Sc55Bridge includes QApplication for its
     # window placement; no widget is created and no event loop is started.
+    # avrt comes with sc55bridge.cpp (MMCSS on its sender thread) and mt32emu
+    # with mt32synth.cpp - both are pulled in by midiplayer.cpp, not by the test.
     target_link_libraries(midiall PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug winmm dwmapi)
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu
+        winmm dwmapi avrt)
     target_include_directories(midiall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    foreach(t loadall render inputs midiall)
+    foreach(t loadall render inputs midiall mt32 mt32ui)
         if(ENGLISH_UI)
             target_compile_definitions(${t} PRIVATE ENGLISH_UI)
         endif()
     endforeach()
+
+    # The tools that link mt32emu need its DLL beside them to start at all.
+    # Without this they fail silently under run_tests.bat - the section header
+    # prints and nothing follows, because Windows cannot load the process.
+    foreach(t render midiall mt32 mt32ui)
+        add_custom_command(TARGET ${t} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:mt32emu> $<TARGET_FILE_DIR:${t}>)
+    endforeach()
+
     message(STATUS "BUILD_TESTS = ON  (corpus test tools)")
 endif()
 

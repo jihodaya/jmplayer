@@ -8,6 +8,7 @@
 #include <QDateTime>
 #include "mainwindow.h"
 #include "settingsmanager.h"
+#include "slowlog.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -82,12 +83,50 @@ static void cleanLeftoverTempMidi()
         tempDir.remove(name);
 }
 
+// Records which event the GUI thread is dispatching, so SlowLog's watcher
+// thread can name it while a freeze is still happening rather than afterwards.
+// Two atomic stores per event; see slowlog.h for why this pairing is what
+// finally localises a stall.
+class Application : public QApplication
+{
+public:
+    Application(int& argc, char** argv) : QApplication(argc, argv) {}
+
+    bool notify(QObject* receiver, QEvent* event) override
+    {
+        // Nested dispatch is normal (a handler sends another event). Only the
+        // outermost frame is recorded: it is the one that owns the whole stall,
+        // and restoring an inner value would need a stack this must not have.
+        const bool outermost = (m_depth++ == 0);
+        if (outermost) {
+            SlowLog::enterEvent(receiver && receiver->metaObject()
+                                    ? receiver->metaObject()->className()
+                                    : "(no receiver)",
+                                int(event->type()));
+        }
+        bool handled;
+        try {
+            handled = QApplication::notify(receiver, event);
+        } catch (...) {
+            --m_depth;
+            if (outermost) SlowLog::leaveEvent();
+            throw;
+        }
+        --m_depth;
+        if (outermost) SlowLog::leaveEvent();
+        return handled;
+    }
+
+private:
+    int m_depth = 0;   // GUI thread only, so no atomic needed
+};
+
 int main(int argc, char *argv[])
 {
     // Set DPI scaling policy for consistent behavior across all resolutions
     QApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
-    QApplication app(argc, argv);
+    Application app(argc, argv);
 
 #ifdef Q_OS_WIN
     SetUnhandledExceptionFilter(writeCrashLog);
@@ -124,5 +163,7 @@ int main(int argc, char *argv[])
     MainWindow window;
     window.show();
 
-    return app.exec();
+    const int rc = app.exec();
+    SlowLog::stopWatchdog();   // joins the watcher before the atomics go away
+    return rc;
 }

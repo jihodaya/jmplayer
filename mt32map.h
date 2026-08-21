@@ -42,6 +42,19 @@ struct GmChoice {
 // Convert an MT-32 tone number (1..128) to its General MIDI equivalent.
 GmChoice toGeneralMidi(int tone);
 
+// The other direction, for the F5 dialog's MT-32 mode: given a GM program
+// (0-based), the first MT-32 tone that maps to it, or 0 when none does.
+//
+// Derived by inverting the table above rather than written by hand. That keeps
+// the two directions from disagreeing, and means no new judgement calls are
+// introduced - a row that GM matched by name lands on a tone the same table
+// already says is its equivalent, instead of dropping to tone 1.
+//
+// Not exhaustive by construction: the MT-32 has no equivalent for parts of the
+// GM set, and those return 0 so the caller can fall back. Melodic only -
+// percussion is handled by the drum-note path.
+int fromGeneralMidi(int gmProgram);
+
 // Decode a .GYB / .OKA instrument record flag byte.
 inline int  toneOfFlag(unsigned char flag) { return (flag >> 1) + 1; }  // 1..128
 inline bool flagHasParams(unsigned char flag) { return (flag & 1) != 0; }

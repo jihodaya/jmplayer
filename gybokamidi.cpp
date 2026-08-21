@@ -210,11 +210,25 @@ QVector<Row> rowsFromPlan(const std::vector<jmpconv::PatchAssignment>& plan,
             }
         }
 
+        // The MT-32 default, in the order that respects what is actually known:
+        // the song's own tone first - it is a person's choice and the file was
+        // written for an MT-32 in the first place - then whatever the GM match
+        // inverts back to, then tone 1, where GAYOBANG started every slot.
+        if (r.mt32Tone >= 1) {
+            r.mt32Program = r.mt32Tone;
+        } else if (!r.drum) {
+            const int t = mt32map::fromGeneralMidi(r.program);
+            r.mt32Program = t >= 1 ? t : 1;
+        } else {
+            r.mt32Program = 1;
+        }
+
         r.baseOrigin   = r.origin;
         r.baseDrum     = r.drum;
         r.baseProgram  = r.program;
         r.baseBankMsb  = r.bankMsb;
         r.baseDrumNote = r.drumNote;
+        r.baseMt32Program = r.mt32Program;
 
         seen[a.slot] = rows.size();
         rows.append(r);
@@ -266,7 +280,8 @@ QVector<Row> buildPlan(const QString& path)
     return rows;
 }
 
-QByteArray toMidi(const QString& path, const QVector<Row>& plan, QString* error)
+QByteArray toMidi(const QString& path, const QVector<Row>& plan, QString* error,
+                  Target target)
 {
     Bytes smf;
     std::vector<jmpconv::Instrument> instTable;
@@ -284,16 +299,30 @@ QByteArray toMidi(const QString& path, const QVector<Row>& plan, QString* error)
         if (it == bySlot.end()) continue;
         const Row& r = *it->second;
         a.drum     = r.drum;
-        a.program  = r.program;
-        a.bankMsb  = r.bankMsb;
         a.drumNote = r.drumNote;
+
+        if (target == Target::Mt32) {
+            // An MT-32 tone number IS a program change - tones are numbered
+            // from 1 and programs from 0, and there is nothing else to it. No
+            // bank select: the MT-32 has no variation banks, and sending CC#0
+            // to one is at best ignored.
+            a.program = qBound(0, r.mt32Program - 1, 127);
+            a.bankMsb = 0;
+        } else {
+            a.program = r.program;
+            a.bankMsb = r.bankMsb;
+        }
     }
 
     // Three things are wrong with the stream as it stands and this fixes all of
     // them: program changes index the song's OPL table rather than GM,
     // percussion sits on ordinary channels, and there are almost no note offs
     // because an OPL voice is monophonic. See gmmap.h.
-    const Bytes out = jmpconv::smfToGeneralMidi(smf, full, true, nullptr);
+    // The GS reset in front exists so variation banks take effect. An MT-32 has
+    // no variation banks and no idea what a GS reset is - it would arrive as an
+    // unrecognised SysEx at best - so it is only sent when the target wants it.
+    const bool gsReset = (target == Target::Gm);
+    const Bytes out = jmpconv::smfToGeneralMidi(smf, full, gsReset, nullptr);
     if (out.empty()) {
         if (error) *error = QObject::tr("Could not build a MIDI stream.");
         return {};
@@ -334,6 +363,7 @@ bool loadSidecar(const QString& songPath, QVector<Row>& plan)
             r.program  = qBound(0, ini.value("program",  r.program).toInt(),  127);
             r.bankMsb  = qBound(0, ini.value("bank",     r.bankMsb).toInt(),  127);
             r.drumNote = qBound(0, ini.value("note",     r.drumNote).toInt(), 127);
+            r.mt32Program = qBound(1, ini.value("mt32", r.mt32Program).toInt(), 128);
             r.origin   = Origin::User;
             any = true;
         }
@@ -364,6 +394,8 @@ bool saveSidecar(const QString& songPath, const QVector<Row>& plan)
     // Written here rather than when the button is pressed, so the file appears
     // once, on purpose.
     ini.setValue("jmp/midiMode", midiModeEnabled(songPath));
+    ini.setValue("jmp/target",
+                 targetModule(songPath) == Target::Mt32 ? "mt32" : "gm");
 
     for (const Row& r : plan) {
         const QString g = QString("slot%1").arg(r.slot);
@@ -374,6 +406,7 @@ bool saveSidecar(const QString& songPath, const QVector<Row>& plan)
             ini.setValue("program", r.program);
             ini.setValue("bank", r.bankMsb);
             ini.setValue("note", r.drumNote);
+            ini.setValue("mt32", r.mt32Program);
         } else {
             // Reverted to its default: drop the group so the file stays a record
             // of decisions actually made, not of every slot in the song.
@@ -410,6 +443,34 @@ bool midiModeEnabled(const QString& songPath)
 void setMidiModeEnabled(const QString& songPath, bool on)
 {
     sessionMidiMode().insert(QFileInfo(songPath).absoluteFilePath().toLower(), on);
+}
+
+// Kept in the session map for the same reason midiMode is: the choice takes
+// effect immediately, but nothing is written to disk until Save.
+static QHash<QString, int>& sessionTarget()
+{
+    static QHash<QString, int> map;
+    return map;
+}
+
+Target targetModule(const QString& songPath)
+{
+    const QString key = QFileInfo(songPath).absoluteFilePath().toLower();
+    auto it = sessionTarget().constFind(key);
+    if (it != sessionTarget().constEnd())
+        return it.value() ? Target::Mt32 : Target::Gm;
+
+    const QString file = existingSidecar(songPath);
+    if (file.isEmpty()) return Target::Gm;
+    QSettings ini(file, QSettings::IniFormat);
+    return ini.value("jmp/target", "gm").toString().compare("mt32", Qt::CaseInsensitive) == 0
+               ? Target::Mt32 : Target::Gm;
+}
+
+void setTargetModule(const QString& songPath, Target target)
+{
+    sessionTarget().insert(QFileInfo(songPath).absoluteFilePath().toLower(),
+                           target == Target::Mt32 ? 1 : 0);
 }
 
 QString originLabel(Origin o)

@@ -32,6 +32,22 @@ enum class Origin {
     User,         // edited here, or restored from the sidecar
 };
 
+// Which module the assignments are written for.
+//
+// The two are different instrument sets, not two names for one: GM program 0 is
+// a piano everywhere, MT-32 tone 1 is `Acou Piano1` and tone 12 is `Elec Org4`,
+// which GM has no equivalent for. A song therefore carries a choice for each,
+// kept side by side so flipping the toggle does not throw the other away.
+//
+// This is also what the song files themselves assumed - GAYOBANG's MIDI mode
+// drove an MPU-401 with an MT-32 on the end, and the tone numbers in their flag
+// bytes are MT-32 numbers (mt32map.h). Until now those were approximated into
+// GM; picking MT-32 here plays them as written.
+enum class Target {
+    Gm,           // General MIDI / GS - what every other output expects
+    Mt32,         // Roland MT-32 / CM-32L, including jmp's built-in one
+};
+
 struct Row {
     int      slot = -1;         // index into the song's instrument table
     QString  oplName;           // the name the song gives the slot
@@ -51,6 +67,13 @@ struct Row {
     int      mt32Tone = 0;      // 1..128 when the song file carried one, else 0
     bool     approximate = false;  // the MT-32 tone has no exact GM equivalent
 
+    // The MT-32 tone this slot plays when the song targets an MT-32, 1..128.
+    // Independent of `program` so the two sets of choices coexist; defaults to
+    // the song's own tone where it had one, otherwise to whatever the GM match
+    // inverts to (mt32map::fromGeneralMidi), otherwise tone 1 - which is where
+    // GAYOBANG started every slot.
+    int      mt32Program = 1;
+
     // What this row started as, so the dialog can offer "revert" and can tell
     // an edit apart from a default.
     Origin   baseOrigin = Origin::Unmatched;
@@ -58,10 +81,12 @@ struct Row {
     int      baseProgram = 0;
     int      baseBankMsb = 0;
     int      baseDrumNote = 38;
+    int      baseMt32Program = 1;
 
     bool edited() const {
         return drum != baseDrum || program != baseProgram ||
-               bankMsb != baseBankMsb || drumNote != baseDrumNote;
+               bankMsb != baseBankMsb || drumNote != baseDrumNote ||
+               mt32Program != baseMt32Program;
     }
 };
 
@@ -78,7 +103,7 @@ QVector<Row> buildPlan(const QString& path);
 // channel 10, note offs synthesised, a GS reset in front. Empty on failure,
 // with the reason in `error` when it is not null.
 QByteArray toMidi(const QString& path, const QVector<Row>& plan,
-                  QString* error = nullptr);
+                  QString* error = nullptr, Target target = Target::Gm);
 
 // Sidecar: `<song>.<ext>.ini`, beside the song. The full extension is kept
 // because the library holds BEYOND.GYB next to BEYOND.OKA - same name, two
@@ -92,6 +117,11 @@ bool     saveSidecar(const QString& songPath, const QVector<Row>& plan);
 // song in the same sidecar, so the choice survives a restart.
 bool midiModeEnabled(const QString& songPath);
 void setMidiModeEnabled(const QString& songPath, bool on);
+
+// Which instrument set this song's assignments are written for. Persisted in
+// the same sidecar; GM unless the user has said otherwise.
+Target targetModule(const QString& songPath);
+void   setTargetModule(const QString& songPath, Target target);
 
 // For the dialog's display.
 QString originLabel(Origin o);

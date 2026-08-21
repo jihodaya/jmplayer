@@ -78,7 +78,7 @@ if errorlevel 1 (
 )
 
 echo [2/5] Building the tools...
-cmake --build build_tests --target inputs loadall midiall render -j 4 > build_tests_build.log 2>&1
+cmake --build build_tests --target inputs loadall midiall render mt32 mt32ui -j 4 > build_tests_build.log 2>&1
 if errorlevel 1 (
     echo ERROR: build failed - see build_tests_build.log
     goto :fail
@@ -92,6 +92,28 @@ echo [3/5] inputs   - external values
 echo ----------------------------------------
 build_tests\inputs.exe
 if errorlevel 1 set /a TOTAL+=1
+
+echo.
+echo ----------------------------------------
+echo mt32     - the MT-32 engine, no window
+echo ----------------------------------------
+REM Before the quick-mode jump on purpose: this one never touches the library,
+REM so there is nothing for "quick" to save by skipping it.
+REM
+REM Skipped without ROMs, which is the normal case - they are Roland's and are
+REM not in this tree. Set MT32_ROMS to a folder holding a control ROM and a PCM
+REM ROM to include it.
+if "%MT32_ROMS%"=="" (
+    echo   SKIPPED: set MT32_ROMS to a folder of MT-32 / CM-32L ROMs to run this
+) else (
+    build_tests\mt32.exe --roms "%MT32_ROMS%" --seconds 2
+    if errorlevel 1 set /a TOTAL+=1
+
+    echo.
+    echo   the panel and its ROM selector ^(a window appears briefly^)
+    build_tests\mt32ui.exe --roms "%MT32_ROMS%"
+    if errorlevel 1 set /a TOTAL+=1
+)
 
 if "%QUICK%"=="1" goto :render
 

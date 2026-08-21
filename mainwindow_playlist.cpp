@@ -8,6 +8,7 @@
 #include "lyricswindow.h"
 #include "constants.h"
 #include "settingsmanager.h"
+#include "slowlog.h"
 #include "oplstereodialog.h"
 #include <QCloseEvent>
 #include "nobfilehandler.h"
@@ -579,6 +580,7 @@ void MainWindow::navigateToFolder(const QString &folderPath)
 
 void MainWindow::navigateToFolderWithoutHistory(const QString &folderPath)
 {
+    JMP_SLOW("navigateToFolderWithoutHistory");
     if (!QFileInfo(folderPath).exists() || !QFileInfo(folderPath).isDir()) {
         return;
     }
@@ -615,6 +617,7 @@ void MainWindow::navigateToFolderWithoutHistory(const QString &folderPath)
 
     // Add subfolders
     dir.setPath(folderPath);
+    JMP_SLOW("  browse: entryInfoList");
     QFileInfoList subFolders = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QFileInfo &folderInfo : subFolders) {
         rows.append(PlaylistRow("📁 " + folderInfo.fileName(), folderInfo.absoluteFilePath(), FOLDER));
@@ -772,6 +775,7 @@ bool MainWindow::isPathAllowed(const QString &path) const
 void MainWindow::navigateToNode(PlaylistTreeNode* node)
 {
     if (!node) return;
+    JMP_SLOW("navigateToNode");
 
     currentNode = node;
     isInBrowsingMode = (node != playlistRoot);
@@ -802,7 +806,7 @@ void MainWindow::updateUIFromCurrentNode()
         }
 
         // First, validate and clean the current node to remove invalid entries
-        validateAndCleanPlaylistTree(currentNode);
+        { JMP_SLOW("  validateAndCleanPlaylistTree"); validateAndCleanPlaylistTree(currentNode); }
 
         QVector<PlaylistRow> rows;
 
@@ -851,7 +855,7 @@ void MainWindow::updateUIFromCurrentNode()
                                     MIDI_FILE));
         }
 
-        playlistModel->setRows(std::move(rows));
+        { JMP_SLOW("  playlistModel->setRows"); playlistModel->setRows(std::move(rows)); }
     } catch (...) {
         qWarning() << "[Playlist] updateUI failed — falling back to minimal state";
         // If the entire function fails, ensure we have a minimal working state
@@ -1159,6 +1163,7 @@ void MainWindow::addFolderToCurrentNodeWithoutSave(const QString &folderPath)
 
 void MainWindow::savePlaylistTree()
 {
+    JMP_SLOW("savePlaylistTree");
     // Same folder the settings live in - the two must never split, which is what
     // would happen if this kept computing the Documents path on its own.
     QString jmplayerDir = SettingsManager::storageDir();

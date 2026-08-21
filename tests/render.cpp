@@ -33,6 +33,8 @@
 #include "gybplayer.h"
 #include "okaplayer.h"
 #include "imsplayer.h"
+#include "jjomesynth.h"
+#include "mt32synth.h"
 
 namespace {
 
@@ -291,5 +293,151 @@ int main(int argc, char** argv)
     if (changed)
         std::cout << "  Re-run with --write-wav to hear what moved." << std::endl;
 
+    // ---------------------------------------------------------------------
+    // Does the block size change the music?
+    //
+    // It must not. The audio device decides how many frames it asks for, and
+    // that is a property of the machine - a 40 ms period on one PC, 10 ms on
+    // another. If a player advances its sequencer once per call and then
+    // synthesises the whole block from the state it ended on, every event in
+    // that block lands at the block boundary instead of where it belongs, and
+    // the same song comes out differently on different hardware.
+    //
+    // IMS is where that bites: it ticks at 240-720 Hz, so a 40 ms buffer holds
+    // ten to thirty ticks. GYB and OKA tick at 8-20 Hz, which is at most one
+    // per buffer, which is why nobody noticed.
+    //
+    // Rendering the same seconds at two block sizes and comparing is the whole
+    // test. Equal hashes mean the player is block-size independent.
+    //
+    // REPORTED, NOT ENFORCED - GYB and OKA still fail it, so counting it would
+    // leave the harness permanently red and hide real regressions.
+    //
+    // Measured 2026-08-21: before that day's fix every song in the manifest
+    // hashed differently at 1,988 frames than at 256, GYB and OKA included. A
+    // report claimed only IMS was affected because only IMS ticks fast enough
+    // to collapse many ticks per buffer; that reasoning is right about the
+    // SEVERITY and wrong about the scope - one tick lands at the block boundary
+    // just as surely as twenty do.
+    //
+    // ImsPlayer::renderAudio() now slices its rendering per tick and the two
+    // .IMS entries read "same", which is what a fixed player looks like here.
+    // GYB and OKA were deliberately left alone: they were reported as fine, and
+    // their sound is fitted to real-chip captures to a fraction of a dB
+    // (kDrumTLOffset, the rhythm frequency work), so moving their event timing
+    // invalidates measurements this project cannot cheaply repeat. Fix them
+    // when there is a reason to, then make this section a real check.
+    {
+        std::cout << std::endl << "--- block-size independence (reported, not enforced) ---"
+                  << std::endl;
+
+        auto hashAt = [&](const QString& song, unsigned int block) {
+            GybPlayer gyb; OkaPlayer oka; ImsPlayer ims;
+            const Engine e = engineFor(song);
+            bool loaded = false;
+            switch (e) {
+                case Engine::Gyb: loaded = gyb.loadFile(song); if (loaded) gyb.play(); break;
+                case Engine::Oka: loaded = oka.loadFile(song); if (loaded) oka.play(); break;
+                case Engine::Ims: loaded = ims.loadFile(song); if (loaded) ims.play(); break;
+                default: break;
+            }
+            if (!loaded) return QString();
+
+            const unsigned int total = 4 * kSampleRate;      // four seconds is plenty
+            std::vector<float> buf(block * 2);
+            QCryptographicHash h(QCryptographicHash::Md5);
+            for (unsigned int done = 0; done < total; done += block) {
+                const unsigned int want = qMin(block, total - done);
+                std::fill(buf.begin(), buf.end(), 0.0f);
+                switch (e) {
+                    case Engine::Gyb: gyb.renderAudio(buf.data(), want); break;
+                    case Engine::Oka: oka.renderAudio(buf.data(), want); break;
+                    case Engine::Ims: ims.renderAudio(buf.data(), want); break;
+                    default: break;
+                }
+                h.addData(QByteArrayView(reinterpret_cast<const char*>(buf.data()),
+                                         int(want * 2 * sizeof(float))));
+            }
+            return QString::fromLatin1(h.result().toHex().left(12));
+        };
+
+        // 1,988 frames is the 40 ms period jmp asks the device for; 256 is what
+        // a low-latency setting would give.
+        for (const QString& song : songs) {
+            if (!QFileInfo::exists(song) || engineFor(song) == Engine::Unsupported)
+                continue;
+            const QString big   = hashAt(song, 1988);
+            const QString small = hashAt(song, 256);
+            if (big.isEmpty() || small.isEmpty())
+                continue;
+
+            std::cout << (big == small ? "same    " : "differs ")
+                      << qPrintable(QFileInfo(song).fileName())
+                      << "   1988=" << qPrintable(big)
+                      << "  256=" << qPrintable(small) << std::endl;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Which source wins inside JJoMeSynth, when more than one is set.
+    //
+    // The OPL players are a source and the MT-32 is a destination, so a .GYB
+    // playing through the OPL engine has to be heard whatever MIDI device is
+    // selected. Getting that order wrong silenced every OPL song for anyone
+    // with the MT-32 chosen, and it shipped (2026-08-21) because nothing here
+    // looked at the mixer - only at the players individually.
+    //
+    // This is the one check in this file that opens the real audio device:
+    // renderAudio() refuses to do anything before initialize(), and the
+    // ordering only exists inside it. It plays silence for a fraction of a
+    // second. Skipped, not failed, where no device can be opened.
+    if (!songs.isEmpty()) {
+        QString gybSong;
+        for (const QString& s : songs) {
+            if (engineFor(s) == Engine::Gyb && QFileInfo::exists(s)) { gybSong = s; break; }
+        }
+
+        if (gybSong.isEmpty()) {
+            std::cout << std::endl
+                      << "skip  source-order check: no .gyb in the manifest" << std::endl;
+        } else if (!JJoMeSynth::instance().initialize(QString())) {
+            std::cout << std::endl
+                      << "skip  source-order check: no audio device" << std::endl;
+        } else {
+            GybPlayer gyb;
+            Mt32Synth mt32;                 // never opened: it must lose anyway
+            if (gyb.loadFile(gybSong)) {
+                gyb.play();
+                JJoMeSynth::instance().setGybPlayer(&gyb);
+                JJoMeSynth::instance().setMt32Synth(&mt32);
+
+                std::vector<float> mix(kBlockFrames * 2, 0.0f);
+                float peak = 0.0f;
+                for (int i = 0; i < 200; ++i) {
+                    std::fill(mix.begin(), mix.end(), 0.0f);
+                    JJoMeSynth::instance().renderAudio(mix.data(), kBlockFrames);
+                    for (float v : mix) peak = qMax(peak, qAbs(v));
+                }
+
+                JJoMeSynth::instance().setGybPlayer(nullptr);
+                JJoMeSynth::instance().setMt32Synth(nullptr);
+                gyb.stop();
+
+                std::cout << std::endl;
+                if (peak > 0.0f) {
+                    std::cout << "ok    an OPL song is still heard with the MT-32 selected"
+                              << "   peak " << peak << std::endl;
+                } else {
+                    std::cout << "FAIL  an OPL song is SILENT with the MT-32 selected"
+                              << "   (source order in JJoMeSynth::renderAudio)" << std::endl;
+                    ++failed;
+                }
+            }
+            JJoMeSynth::instance().shutdown();
+        }
+    }
+
+    if (failed > 0 && changed == 0)
+        return 1;
     return changed > 0 ? 1 : 0;
 }

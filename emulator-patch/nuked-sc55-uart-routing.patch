@@ -59,7 +59,7 @@ index d98c260..c5c2f90 100644
      }
  
 diff --git a/src/standard/lcd_sdl.cpp b/src/standard/lcd_sdl.cpp
-index 5612148..4f39e4c 100644
+index 5612148..f72c8f2 100644
 --- a/src/standard/lcd_sdl.cpp
 +++ b/src/standard/lcd_sdl.cpp
 @@ -3,8 +3,25 @@
@@ -88,7 +88,7 @@ index 5612148..4f39e4c 100644
  const SDL_Rect lcd_button_regions_sc55[32] = {
      {  38,  36, 67, 19}, // Power
      {   0,   0,  0,  0},
-@@ -219,11 +236,20 @@ bool LCD_SDL_Backend::Start(lcd_t& lcd)
+@@ -219,20 +236,69 @@ bool LCD_SDL_Backend::Start(lcd_t& lcd)
          }
      }
  
@@ -111,16 +111,58 @@ index 5612148..4f39e4c 100644
                                  SDL_WINDOW_SHOWN);
      if (!m_window)
          return false;
-@@ -233,6 +259,8 @@ bool LCD_SDL_Backend::Start(lcd_t& lcd)
+ 
+-    m_renderer = SDL_CreateRenderer(m_window, -1, 0);
++    // Ask for hardware acceleration rather than taking whatever comes first.
++    //
++    // Stock passes 0, which lets SDL fall back to its software renderer without
++    // saying so - and then every draw, including the rescale below, is done on
++    // the CPU. That is invisible until the machine is short of it: on the
++    // reporter's i5-8250U a 0.75 scale was enough to make the emulator lose
++    // realtime and crackle, while 1.0 - which skips the rescale entirely - was
++    // clean (2026-08-20). Falling back is still allowed if acceleration is
++    // genuinely unavailable, but which one it got is now printed.
++    m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED);
++    if (!m_renderer)
++        m_renderer = SDL_CreateRenderer(m_window, -1, 0);
+     if (!m_renderer)
          return false;
  
-     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "BEST");
+-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "BEST");
++    // Which renderer this got decides whether scaling is nearly free or is done
++    // on the CPU, so it has to be visible. It goes in the WINDOW TITLE rather
++    // than only to stderr, because this is linked with SDL2main and is therefore
++    // a Windows GUI-subsystem binary: started from a command prompt it never
++    // attaches to that console, so printf has nowhere to go and even
++    // "> log.txt 2>&1" came back empty when the reporter tried it (2026-08-20).
++    {
++        SDL_RendererInfo info{};
++        if (SDL_GetRendererInfo(m_renderer, &info) == 0)
++        {
++            const bool accel = (info.flags & SDL_RENDERER_ACCELERATED) != 0;
++            fprintf(stderr, "LCD renderer: %s%s\n",
++                    info.name ? info.name : "?",
++                    accel ? "" : "  (SOFTWARE - scaling will cost CPU)");
++            fflush(stderr);
++
++            title += accel ? "  [" : "  [SOFTWARE: ";
++            title += info.name ? info.name : "?";
++            title += ']';
++            SDL_SetWindowTitle(m_window, title.c_str());
++        }
++    }
++
++    // "linear", not "best". On D3D9 "best" means anisotropic filtering, which
++    // is meant for textures viewed at an angle and is far more work than a
++    // downscale of flat artwork needs; on the other backends SDL maps both to
++    // linear anyway, so this costs nothing where it was already cheap.
++    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 +    if (scale != 1.0f)
 +        SDL_RenderSetScale(m_renderer, scale, scale);
  
      m_texture = SDL_CreateTexture(
          m_renderer, SDL_PIXELFORMAT_BGR888, SDL_TEXTUREACCESS_STREAMING, (int32_t)m_lcd->width, (int32_t)m_lcd->height);
-@@ -320,6 +348,30 @@ void LCD_SDL_Backend::HandleEvent(const SDL_Event& sdl_event)
+@@ -320,6 +386,30 @@ void LCD_SDL_Backend::HandleEvent(const SDL_Event& sdl_event)
      // GUI Controls for SC-55
      if ((m_lcd->mcu->romset == Romset::MK1 || m_lcd->mcu->romset == Romset::MK2 || m_lcd->mcu->romset == Romset::JV880) && background_enabled)
      {
@@ -151,7 +193,7 @@ index 5612148..4f39e4c 100644
          LCD_Knob* sc_knobs[] = {&sc_volume};
          LCD_Knob* jv_knobs[] = {&jv_volume, &jv_encoder};
          const SDL_Rect* button_regions = &lcd_button_regions_sc55[0];
-@@ -381,7 +433,9 @@ void LCD_SDL_Backend::HandleEvent(const SDL_Event& sdl_event)
+@@ -381,7 +471,9 @@ void LCD_SDL_Backend::HandleEvent(const SDL_Event& sdl_event)
                  if (!knob->dragging)
                      continue;
                  float angle = (float) atan2(sdl_event.motion.y - (knob->y + (knob->h >> 1)), sdl_event.motion.x - (knob->x + (knob->w >> 1))) + DEG2RAD(270.0f);
@@ -176,10 +218,18 @@ index b309438..6f8d57c 100644
 +void  LCD_SDL_SetScale(float scale);
 +float LCD_SDL_Scale();
 diff --git a/src/standard/main.cpp b/src/standard/main.cpp
-index cc9ff9b..bc0bcc0 100755
+index cc9ff9b..24db6b4 100755
 --- a/src/standard/main.cpp
 +++ b/src/standard/main.cpp
-@@ -239,6 +239,21 @@ void FE_BroadcastSerial(FE_Application& fe, const uint8_t sbyte)
+@@ -59,6 +59,7 @@
+ 
+ #ifdef _WIN32
+ #include <Windows.h>
++#include <avrt.h>
+ #endif
+ 
+ template <typename ElemT>
+@@ -239,6 +240,21 @@ void FE_BroadcastSerial(FE_Application& fe, const uint8_t sbyte)
      }
  }
  
@@ -201,7 +251,7 @@ index cc9ff9b..bc0bcc0 100755
  void FE_RouteSerial(FE_Application& fe, uint8_t sbyte)
  {
      if (sbyte == 0xF0)
-@@ -250,11 +265,14 @@ void FE_RouteSerial(FE_Application& fe, uint8_t sbyte)
+@@ -250,11 +266,14 @@ void FE_RouteSerial(FE_Application& fe, uint8_t sbyte)
  
      if (fe.current_instance == 16)
      {
@@ -218,7 +268,88 @@ index cc9ff9b..bc0bcc0 100755
      }
  }
  
-@@ -1136,6 +1154,17 @@ FE_ParseError FE_ParseCommandLine(int argc, char* argv[], FE_Parameters& result)
+@@ -734,6 +753,31 @@ void FE_RunInstanceSDL(FE_Instance& instance)
+ {
+     const size_t max_byte_count = instance.buffer_count * instance.buffer_size * sizeof(AudioFrame<SampleT>);
+ 
++    // This thread IS the audio producer, and it was left at ordinary priority.
++    //
++    // It keeps buffer_count * buffer_size frames queued and no more - 16 * 512
++    // at 66207 Hz is 124 ms - then sleeps a millisecond at a time. So the whole
++    // margin against a dropout is 124 ms of scheduling luck: let this thread be
++    // held off longer than that and the buffer runs dry, which is the crackling
++    // heard when another program starts up. SDL registers the audio *callback*
++    // thread with MMCSS, but the callback has nothing to hand out if this one
++    // has not run.
++    //
++    // "Pro Audio" rather than a raw priority bump: it costs nothing while the
++    // buffer is full (this thread sleeps then, and MMCSS gives the boost back
++    // when it idles) and it is the mechanism Windows expects for exactly this.
++    //
++    // NOTE: an earlier version of this patch put the same call on the serial
++    // reader thread instead, on the theory that it was holding a lock the audio
++    // path needed. That was wrong - the audio path never takes that lock, and
++    // the change measured as nothing. This is the thread that must not be late.
++#ifdef _WIN32
++    DWORD mmcssIndex = 0;
++    HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcssIndex);
++    if (mmcss)
++        AvSetMmThreadPriority(mmcss, AVRT_PRIORITY_HIGH);
++#endif
++
+     while (instance.running)
+     {
+         while (instance.view.GetReadableBytes() >= max_byte_count)
+@@ -743,6 +787,11 @@ void FE_RunInstanceSDL(FE_Instance& instance)
+ 
+         instance.emu.Step();
+     }
++
++#ifdef _WIN32
++    if (mmcss)
++        AvRevertMmThreadCharacteristics(mmcss);
++#endif
+ }
+ 
+ #if NUKED_ENABLE_ASIO
+@@ -781,6 +830,8 @@ bool FE_HandleGlobalEvent(FE_Application& fe, const SDL_Event& ev)
+ 
+ void FE_EventLoop(FE_Application& fe, bool Is_Serial = false)
+ {
++    bool redraw_phase = false;   // see the redraw comment below
++
+     while (fe.running)
+     {
+ #if NUKED_ENABLE_ASIO
+@@ -790,6 +841,17 @@ void FE_EventLoop(FE_Application& fe, bool Is_Serial = false)
+         }
+ #endif
+ 
++        // Redraw at half the loop rate - about 33 fps instead of 66.
++        //
++        // The loop ticks every 15 ms because that is how often it wants to
++        // check for events, not because the panel needs redrawing that often:
++        // a hardware SC-55's display updates far more slowly than the eye can
++        // follow, and nothing here animates. Drawing it twice as often as
++        // necessary is free on a desktop and is not on a thermally limited
++        // laptop, where the emulator is already close to losing realtime.
++        //
++        // Quit is still checked every pass; only the drawing is halved.
++        redraw_phase = !redraw_phase;
+         for (size_t i = 0; i < fe.instances_in_use; ++i)
+         {
+             if (fe.instances[i].sdl_lcd)
+@@ -799,7 +861,8 @@ void FE_EventLoop(FE_Application& fe, bool Is_Serial = false)
+                     fe.running = false;
+                 }
+             }
+-            LCD_Render(fe.instances[i].emu.GetLCD());
++            if (redraw_phase)
++                LCD_Render(fe.instances[i].emu.GetLCD());
+         }
+ 
+         SDL_Event ev;
+@@ -1136,6 +1199,17 @@ FE_ParseError FE_ParseCommandLine(int argc, char* argv[], FE_Parameters& result)
              }
              result.remote_pipe = reader.Arg();
          }
@@ -236,7 +367,7 @@ index cc9ff9b..bc0bcc0 100755
          else if (reader.Any("-a", "--audio-device"))
          {
              if (!reader.Next())
-@@ -1445,6 +1474,7 @@ Emulator options:
+@@ -1445,6 +1519,7 @@ Emulator options:
    -r, --reset     none|gs|gm                    Reset system in GS or GM mode. (No GM in MK1 1.00 & 1.10)
    -n, --instances <count>                       Set number of emulator instances.
    --no-lcd                                      Run without LCDs.
@@ -244,7 +375,7 @@ index cc9ff9b..bc0bcc0 100755
    --nvram <filename>                            Saves and loads NVRAM to/from disk. JV-880 only.
  
  ROM management options:
-@@ -1645,25 +1675,35 @@ int main(int argc, char *argv[])
+@@ -1645,25 +1720,35 @@ int main(int argc, char *argv[])
          return 1;
      }
  
@@ -287,7 +418,7 @@ index cc9ff9b..bc0bcc0 100755
          if (!params.midiout_device.empty() && frontend.romset == Romset::ST)
          {
              fprintf(stderr, "WARNING: MIDI Output is not available for SC-55st, continuing with only MIDI Input...");
-@@ -1726,10 +1766,15 @@ int main(int argc, char *argv[])
+@@ -1726,10 +1811,15 @@ int main(int argc, char *argv[])
  
      FE_PrintControls(frontend.romset);
  
@@ -308,7 +439,7 @@ index cc9ff9b..bc0bcc0 100755
      FE_Quit(frontend);
  
 diff --git a/src/standard/serial_win32.cpp b/src/standard/serial_win32.cpp
-index a6d1730..5d4f27e 100644
+index a6d1730..0fbfccf 100644
 --- a/src/standard/serial_win32.cpp
 +++ b/src/standard/serial_win32.cpp
 @@ -4,6 +4,7 @@
@@ -319,7 +450,54 @@ index a6d1730..5d4f27e 100644
  #include <thread>
  
  #define BUFFER_SIZE 4096
-@@ -415,16 +416,71 @@ void SERIAL_Quit()
+@@ -30,6 +31,11 @@ class Serial_Handler
+ 
+         bool HasData() { return read_ptr < read_end; }
+ 
++        // The event the overlapped read signals when bytes land. Handed out so
++        // the reader thread can sleep on it instead of asking again and again -
++        // see SERIAL_Read_Updater. Only meaningful while serial_init is set.
++        HANDLE ReadEventHandle() { return olRead.hEvent; }
++
+         uint8_t Read()
+         {
+             if (read_ptr < read_end) 
+@@ -367,7 +373,33 @@ void SERIAL_Update()
+     s_handler->WriteSerialPort();
+ }
+ 
+-bool SERIAL_HasData() 
++// A private handle to the read event, for the reader thread to wait on.
++//
++// It is duplicated rather than borrowed because SerialClose() closes the
++// original the moment an I/O error happens, and that can be driven from the
++// event-loop thread while the reader thread is parked on it - waiting on a
++// handle someone else has closed is undefined. The duplicate keeps the kernel
++// object alive, so the worst case after a close is that it simply never signals
++// again and the reader falls back to its timeout.
++static HANDLE SERIAL_DuplicateReadEvent()
++{
++    std::lock_guard<std::mutex> lock(serial_io_mutex);
++
++    if (!s_handler || !s_handler->IsSerialInit())
++    {
++        return NULL;
++    }
++
++    HANDLE dup = NULL;
++    if (!DuplicateHandle(GetCurrentProcess(), s_handler->ReadEventHandle(),
++                         GetCurrentProcess(), &dup, 0, FALSE, DUPLICATE_SAME_ACCESS))
++    {
++        return NULL;
++    }
++    return dup;
++}
++
++bool SERIAL_HasData()
+ {
+     if (!s_handler || !s_handler->IsSerialInit())
+     {
+@@ -415,16 +447,103 @@ void SERIAL_Quit()
      return;
  }
  
@@ -338,40 +516,46 @@ index a6d1730..5d4f27e 100644
 +// in both places is safe.
  void SERIAL_Read_Updater(FE_Application& fe, serial_read_callback read_callback)
  {
-+    // Ask the multimedia scheduler to treat this like an audio thread.
++    // This thread is the MIDI input path, and it was left at ordinary priority.
 +    //
-+    // SDL already registers the audio callback thread with MMCSS - measured, it
-+    // runs at priority 24 - but this one is left at the ordinary 9 or 10. It
-+    // takes serial_io_mutex on every pass, and the emulation that fills the
-+    // audio buffer needs the same lock, so whenever this thread is descheduled
-+    // while holding it the sound stops being generated. That is why a very
-+    // light program starting up - the Windows card game, in the report of
-+    // 2026-08-19 - can put noise in the output while the process as a whole is
-+    // using under a quarter of one core: it is not short of CPU, it is losing
-+    // the lock at the wrong moment.
++    // A MIDI port has no equivalent: the host calls midiOutShortMsg, the kernel
++    // takes it, and the Windows MIDI stack delivers on its own realtime thread -
++    // zero hops that a busy machine can delay. The pipe adds two, this being the
++    // second, and both sat at priority 8-10. So while a browser is loading, the
++    // one path that gets held up is the one that plays badly (owner's testing,
++    // 2026-08-20: the same emulator launched by hand and fed through loopMIDI is
++    // clean, so the binary, SDL and ROMs are all ruled out - what is left is how
++    // the bytes get in).
 +    //
-+    // This thread exists only on the named-pipe path, which is why the same
-+    // music through loopMIDI has never had the problem.
++    // "Pro Audio" is right here for the same reason it is right on the audio
++    // producer: the thread does almost nothing and sleeps between bytes, so it
++    // takes essentially nothing from anything else, and MMCSS returns the boost
++    // when it idles.
 +    //
-+    // "Pro Audio" is the right task here rather than a raw priority bump: the
-+    // thread does almost nothing, so it takes essentially nothing away from
-+    // whatever else is running, and MMCSS gives back its boost when it idles.
++    // NOTE: an MMCSS call was put here on 2026-08-19 and removed on 2026-08-20
++    // because its stated reason - contention on serial_io_mutex - was false, and
++    // it made no difference to CPU. That reasoning is still wrong; this is a
++    // different claim, about delivery latency under load, and it is measured
++    // against nothing yet.
 +    DWORD mmcssIndex = 0;
 +    HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcssIndex);
 +    if (mmcss)
 +        AvSetMmThreadPriority(mmcss, AVRT_PRIORITY_HIGH);
 +
++    // Sleep on the read event rather than asking repeatedly. A MIDI port
++    // delivers by callback - the thread is woken when a byte arrives and costs
++    // nothing in between - and that is the one structural difference left
++    // between this path and the port path that plays cleanly.
++    HANDLE readEvent = SERIAL_DuplicateReadEvent();
++
      while (serial_thread_run)
      {
 -        std::lock_guard<std::mutex> lock(serial_io_mutex);
 +        SERIAL_Update();            // takes the mutex itself - do not hold it here
- 
--        if (SERIAL_HasData())
++
 +        bool delivered = false;
 +        for (;;)
-         {
--            uint8_t sbyte = SERIAL_ReadUART();
--            read_callback(fe, sbyte);        
++        {
 +            uint8_t sbyte;
 +            {
 +                std::lock_guard<std::mutex> lock(serial_io_mutex);
@@ -383,14 +567,40 @@ index a6d1730..5d4f27e 100644
 +            // business holding up the writer.
 +            read_callback(fe, sbyte);
 +            delivered = true;
-         }
-+
++        }
+ 
+-        if (SERIAL_HasData())
 +        // Only idles when the line is quiet, so a busy passage is never waited
-+        // on. 250 us keeps the thread cheap while staying far below the ~320 us
-+        // a single MIDI byte occupies on a real 31250-baud cable.
++        // on.
++        //
++        // SERIAL_Update() above has just issued the next overlapped read, which
++        // leaves the event unsignalled until a byte actually lands - so this
++        // parks the thread outright: no wake-ups, and a byte is picked up the
++        // instant it arrives rather than up to a poll interval later. The
++        // timeout is only there so the thread notices serial_thread_run going
++        // false, and so a closed port degrades into a slow poll rather than a
++        // hang.
++        //
++        // The fallback below is used when no read is outstanding (a read that
++        // completed synchronously). It MUST NOT go under 1 ms: MinGW's
++        // sleep_for spins rather than sleeping for sub-millisecond waits, so
++        // the 250 us that stood here did not idle at all - measured with an
++        // identical generated note stream, the emulator took 128 % of a core
++        // over the pipe against 28 % for the same music through a MIDI port,
++        // with the same binary either way.
 +        if (!delivered)
-+            std::this_thread::sleep_for(std::chrono::microseconds(250));
+         {
+-            uint8_t sbyte = SERIAL_ReadUART();
+-            read_callback(fe, sbyte);        
++            if (readEvent)
++                WaitForSingleObject(readEvent, 50);
++            else
++                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+         }
      }
++
++    if (readEvent)
++        CloseHandle(readEvent);
 +
 +    if (mmcss)
 +        AvRevertMmThreadCharacteristics(mmcss);

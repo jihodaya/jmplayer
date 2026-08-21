@@ -1,8 +1,16 @@
-# JMPlayer R2.7d — User Manual
+# JMPlayer V3.0.0 beta — User Manual
 
 *[한국어 매뉴얼은 여기 → MANUAL.ko.md](MANUAL.ko.md)*
 
 JMPlayer is a retro music player for Windows that plays standard MIDI files and 1990s Korean DOS-era music/karaoke formats, using SoundFont synthesis and software OPL3 (AdLib) FM emulation.
+
+> **New in V3.0.0 beta**
+>
+> * **A built-in MT-32 / CM-32L** — the Roland MT-32 now plays inside the program, front panel and ROM selector included (section 12).
+> * **A GM / MT-32 switch in the F5 instrument list** — choose which module a `.gyb` / `.oka` played through MIDI should be matched to (section 15).
+> * Fixed an uneven, drifting tempo while playing `.ims` / `.rol` / `.sop`.
+>
+> This is a test build ahead of the final V3.0.0.
 
 ---
 
@@ -10,11 +18,11 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 
 | Extension | Description | Sound engine | Lyrics |
 |---|---|---|---|
-| `.mid` `.midi` | Standard MIDI | SoundFont (JJoMe Synth) or system MIDI device | – |
+| `.mid` `.midi` | Standard MIDI | SoundFont (JJoMe Synth), any system MIDI device, Nuked SC-55 (section 11), MT-32 (section 12) | – |
 | `.nob` | Oksori karaoke (MIDI + Johab lyrics) | SoundFont / MIDI device | ✔ syllable sync |
-| `.oka` | Oksori karaoke (OPL) | OPL3 emulation **or a MIDI module** (section 14) | ✔ syllable sync |
+| `.oka` | Oksori karaoke (OPL) | OPL3 emulation **or a MIDI module** (section 15) | ✔ syllable sync |
 | `.okm` `.okw` | Oksori karaoke (MIDI) | SoundFont / MIDI device | ✔ syllable sync |
-| `.gyb` | Gayobang karaoke (OPL) — Korean & English releases | OPL3 emulation **or a MIDI module** (section 14) | ✔ syllable sync |
+| `.gyb` | Gayobang karaoke (OPL) — Korean & English releases | OPL3 emulation **or a MIDI module** (section 15) | ✔ syllable sync |
 | `.ims` (+`.iss`) | IMS AdLib music (+ISS lyric file) | OPL3 emulation | ✔ (with .iss) |
 | `.rol` | AdLib Visual Composer | OPL3 emulation | – |
 | `.sop` | Note (sopepos) | OPL3 emulation | – |
@@ -24,7 +32,7 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 ## 2. Main Window
 
 ### Top bar
-* **Output device combo** — choose `[JJoMe Synth (SoundFont)]` (built-in synthesizer), any system MIDI output device, or **Nuked SC-55** (section 11). Applies to MIDI/NOB/OKM playback; OPL formats always use the built-in OPL3 emulator.
+* **Output device combo** — choose `[JJoMe Synth (SoundFont)]` (built-in synthesizer), any system MIDI output device, **Nuked SC-55** (section 11), or **[MT32 JMP]** (the built-in MT-32, section 12). Applies to MIDI/NOB/OKM playback; OPL formats always use the built-in OPL3 emulator.
 * **R** — refresh the list of MIDI devices.
 * **⚙️** — open the **SoundFont Manager** (switch the active `.sf2`).
 * **Search box** — live filter for the playlist; clearing the text restores the full list.
@@ -58,8 +66,8 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | **DSP** | Analog simulation for OPL output (LPF + soft saturation), 3 levels: DSP → DSP2 → DSP3 → off |
 | 🎹 | Toggle the **Piano Roll** window |
 | **BNK** | Select an external OPL instrument bank (`.BNK` / `.IBK`) for AdLib formats |
-| **MIDI** | play a `.gyb` / `.oka` **through a MIDI module** instead of OPL (section 14). Appears when one is selected |
-| **OUT** | **OPL tunnel** — stream OPL registers to the selected MIDI device (section 12, `Ctrl+Shift+O`) |
+| **MIDI** | play a `.gyb` / `.oka` **through a MIDI module** instead of OPL (section 15). Appears when one is selected |
+| **OUT** | **OPL tunnel** — stream OPL registers to the selected MIDI device (section 13, `Ctrl+Shift+O`) |
 | 📜 | Toggle the **Lyrics Window** |
 | ⏺ | Record the audio output to a WAV file (also **Ctrl+R**) |
 
@@ -78,8 +86,8 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | **F9 / F10** | Key transpose −1 / +1 semitone (range −6…+6, all formats) |
 | **F11** | Reset tempo and key to the original |
 | **F12** | OPL pseudo-stereo / performance mode dialog (modes 1–9) |
-| **F5** | **Change instruments** — for a `.gyb` / `.oka` played through MIDI (section 14) |
-| **F6** | **Sound-module reset** — whether to reset the device on each new song (section 13) |
+| **F5** | **Change instruments** — for a `.gyb` / `.oka` played through MIDI (section 15) |
+| **F6** | **Sound-module reset** — whether to reset the device on each new song (section 14) |
 | **Ctrl+R** | Start / stop WAV recording |
 | **Ctrl+Shift+O** | Toggle the OPL tunnel (same as the **OUT** button) |
 | **Esc** | Clear the search box and return to the list |
@@ -164,7 +172,38 @@ supply it yourself:
 Once that is in place the emulator starts alongside the first song, and playback
 waits for it to finish booting. No virtual MIDI port such as loopMIDI is needed.
 
-## 12. OPL Tunnel (**OUT**)
+## 12. MT-32 / CM-32L, built in (**MT32 JMP**)
+
+The Roland MT-32 and CM-32L play **inside the program**. Select **[MT32 JMP]** in
+the output device combo. Unlike the SC-55 there is no second program to launch:
+the synthesizer ships as a library, so JMPlayer itself becomes the MT-32. Nothing
+to build, and no virtual MIDI port.
+
+**The ROMs are not bundled** - they belong to Roland. Put a matching control ROM
+and PCM ROM **as a pair** in the **`MT32ROMs\`** folder next to the program and
+the machine appears in the device list. Several pairs can sit there together;
+which machine each pair is, is worked out for you.
+
+**The front panel** - selecting the device opens a small window showing the
+twenty characters the real unit would be displaying: the text a song sends, the
+part indicators, and the MIDI message lamp, all behaving as they do on the
+hardware. It is parked above the main window, the same rule the SC-55 panel
+follows.
+
+**Choosing a ROM** - the box under the display picks which machine to play
+through. **Changing it during playback stops the song and starts it again from
+the beginning.** Changing the ROM is the same as power-cycling the unit, and the
+part and timbre setup a song sends in its opening bars has to reach the new
+machine from the start.
+
+**Volume** follows the main slider, and the panel shows the same number.
+
+> **An MT-32 does not listen on MIDI channel 1.** Its parts are assigned to
+> channels 2-9 with rhythm on 10. That is the hardware's behaviour, not a fault:
+> music actually written for an MT-32 assigns its own parts. Playing a GM file
+> as-is can therefore lose channel 1, which is usually the lead.
+
+## 13. OPL Tunnel (**OUT**)
 
 While an OPL format plays, this streams the register writes out to the **selected
 MIDI output device**, so real or emulated OPL hardware - a Raspberry Pi jukebox,
@@ -173,7 +212,7 @@ for instance - plays the same performance.
 It is of no use without a device on the other end. Toggle it with the **OUT**
 button or `Ctrl+Shift+O`; the setting is remembered between runs.
 
-## 13. Sound-Module Reset (**F6**)
+## 14. Sound-Module Reset (**F6**)
 
 Chooses whether a reset is sent to the output device before each new song, so the
 previous song leaves no patches, volumes or effects behind.
@@ -186,7 +225,7 @@ previous song leaves no patches, volumes or effects behind.
   driving an external MIDI module.
 
 
-## 14. `.GYB` / `.OKA` through a MIDI module (**MIDI** button, **F5**)
+## 15. `.GYB` / `.OKA` through a MIDI module (**MIDI** button, **F5**)
 
 GAYOBANG and NORE45 could both play these songs on a **MIDI module instead of the OPL chip** (sound source 7). This brings that back.
 
@@ -195,6 +234,14 @@ GAYOBANG and NORE45 could both play these songs on a **MIDI module instead of th
 **Why instruments have to be assigned** — a program change in these formats indexes the song's **own OPL instrument table**, not General MIDI. Sent as-is, a bass drum lands on Vibraphone. So each slot needs a GM instrument.
 
 **F5 — the instrument list**
+
+**GM / MT-32** — the two buttons at the top of the window choose which module the
+song is being matched to. Both are always shown and only the selected one is
+coloured. Picking **MT-32** switches the *Play as* list to the MT-32's own tones,
+and makes the assignment stored in the song file be used **as the number it
+already is** rather than translated to GM - which is what you want when listening
+through **[MT32 JMP]** (section 12) or a real MT-32. The choice is saved per
+song in the same `.ini` as the instruments.
 
 | Column | Meaning |
 |---|---|
@@ -206,7 +253,7 @@ GAYOBANG and NORE45 could both play these songs on a **MIDI module instead of th
 
 Defaults are ranked by how much they can be trusted:
 
-1. **From the song file** — somebody chose it in the DOS program in the 1990s and it was saved into the file. Stored as an MT-32 tone number, shown translated to GM. The most reliable of the three.
+1. **From the song file** — somebody chose it in the DOS program in the 1990s and it was saved into the file. Stored as an MT-32 tone number: translated to GM in GM mode, used unchanged in MT-32 mode. The most reliable of the three.
 2. **Matched by name** — the patch name is matched against a rule set. Across the real library this settles about **89 %** of slot uses.
 3. **Not recognised** — nothing is known. **These are the ones that need your ear, and there are usually only three or four per song.** Tick *Show only what was not recognised* to see just those.
 
@@ -216,7 +263,7 @@ Defaults are ranked by how much they can be trusted:
 
 > Songs in a location that cannot be written to — a CD, for instance — save into the settings folder instead.
 
-## 15. Tips
+## 16. Tips
 
 * All settings (volume, device, repeat mode, DSP level, last folder/position) are saved automatically.
 * ZIP archives can be opened directly — contained songs are listed and playable.

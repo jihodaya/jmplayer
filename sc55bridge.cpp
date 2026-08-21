@@ -20,6 +20,7 @@
 #include <QRect>
 #include <QProgressDialog>
 #include <QEventLoop>
+#include <avrt.h>          // MMCSS for the sender thread - see SenderLoop
 #include <algorithm>
 #include <chrono>
 
@@ -275,7 +276,11 @@ void Sc55Bridge::SenderLoop()
     // Park the emulator's window out of jmp's way, then let the firmware finish
     // booting before anything is sent. Both happen here rather than in Start()
     // so selecting the device doesn't freeze the UI.
-    PlaceEmulatorWindow();
+    //
+    // With --no-lcd there is no window to place, and PlaceEmulatorWindow would
+    // poll for one for four seconds before giving up.
+    if (!m_bHidePanel)
+        PlaceEmulatorWindow();
 
     {
         const auto until = clock::now() + std::chrono::milliseconds(BootSettleMs);
@@ -286,6 +291,32 @@ void Sc55Bridge::SenderLoop()
     // Releases Start(), which is holding the UI until this point so no song can
     // begin while the firmware is still coming up.
     m_bReady.store(true, std::memory_order_release);
+
+    // This thread is where a note leaves jmp, and it was at ordinary priority.
+    //
+    // Sending to a MIDI port has nothing like it: midiOutShortMsg hands the
+    // bytes to the kernel on the spot and the Windows MIDI stack delivers them
+    // on its own realtime thread. The pipe route adds two hops instead - this
+    // one, and the reader thread inside the emulator - and until 2026-08-20
+    // both ran at priority 8-10, so both are held up exactly when the machine
+    // is busy. That is the difference the owner's testing kept pointing at:
+    // the same emulator, launched by hand and fed through loopMIDI, plays
+    // cleanly while a browser loads; driven through this path it crackles.
+    //
+    // "Pro Audio" rather than a raw bump: the thread sleeps between chunks, so
+    // it takes essentially nothing from anything else, and MMCSS hands the
+    // boost back when it idles.
+    // Scoped, because the loop below returns early when the pipe dies.
+    struct MmcssScope {
+        HANDLE h = NULL;
+        MmcssScope() {
+            DWORD index = 0;
+            h = AvSetMmThreadCharacteristicsW(L"Pro Audio", &index);
+            if (h)
+                AvSetMmThreadPriority(h, AVRT_PRIORITY_HIGH);
+        }
+        ~MmcssScope() { if (h) AvRevertMmThreadCharacteristics(h); }
+    } mmcss;
 
     // One chunk every 2 ms keeps the pacing smooth without waking constantly.
     // At low rates that is a fraction of a byte per tick, so carry the
@@ -420,10 +451,20 @@ bool Sc55Bridge::Start()
     // dump, so dropping ROMs in the folder is all the user has to do. (An ini
     // key for this was added and then removed - the emulator was fixed instead.)
 
-    // Shrink the panel GUI. Its artwork fixes the window at 1120x233, which
-    // crowds jmp on a normal screen. Settable (ini key Sc55/WindowScale) since
-    // the comfortable size depends on the display.
-    {
+    // Sc55/HidePanel: no window at all. The panel is redrawn every 15 ms
+    // regardless, and on a thermally limited laptop that is CPU and GPU the
+    // emulator needs to keep up - see the header.
+    m_bHidePanel = SettingsManager::instance()
+        .value("Sc55/HidePanel", DefaultHidePanel).toBool();
+    if (m_bHidePanel) {
+        args << "--no-lcd";
+    } else {
+        // Shrink the panel GUI. Its artwork fixes the window at 1120x233, which
+        // crowds jmp on a normal screen. Settable (ini key Sc55/WindowScale)
+        // since the comfortable size depends on the display.
+        //
+        // 0.75 by default again since the emulator patch made the rescale
+        // cheap; set 1.0 to skip scaling altogether. See the header.
         double scale = SettingsManager::instance()
             .value("Sc55/WindowScale", DefaultWindowScale).toDouble();
         if (scale < 0.25) scale = 0.25;

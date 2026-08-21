@@ -51,6 +51,11 @@ public:
     void setImsPlayer(class ImsPlayer* player);
     void setGybPlayer(class GybPlayer* player);
     void setOkaPlayer(class OkaPlayer* player);
+
+    // MT-32 (munt). Set while the MT-32 device is chosen; the render chain
+    // below prefers it over the SoundFont, the same way the OPL players do.
+    // Not owned - MidiPlayer keeps it alive and clears this before deleting.
+    void setMt32Synth(class Mt32Synth* synth);
     QString getSoundFontName() const;
 
     void setOplStereoMode(int mode);
@@ -74,6 +79,7 @@ private:
     std::atomic<ImsPlayer*> m_imsPlayer;
     std::atomic<GybPlayer*> m_gybPlayer;
     std::atomic<OkaPlayer*> m_okaPlayer;
+    std::atomic<class Mt32Synth*> m_mt32Synth{nullptr};
     std::atomic<bool> m_initialized;
 
     QString m_currentSoundFontPath;

@@ -14,6 +14,8 @@
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
 #include "patchdialog.h"
+#include "mt32display.h"
+#include "mt32synth.h"
 #include "gybokamidi.h"
 #include "okaplayer.h"
 #include "okabackend.h"
@@ -478,7 +480,17 @@ void MainWindow::onVolumeChanged(int value)
     // not recognise, so this is safe against any receiver.
     OplTunnelSender::instance().setVolume(value * 100 / 127);
 
-    volumeValue->setText(QString::number(value));
+    // Shown as a percentage, not as the raw 0-127.
+    //
+    // The slider stays 0-127 because that is what CC#7 is, but the number
+    // beside it has to be comparable with what a device reports back - and the
+    // MT-32's panel counts 0-100, since its master volume register does
+    // (mt32emu: DEFAULT_MASTER_VOLUME = 100, "Confirmed"). Reading 114 here
+    // while the MT-32 read 89 looked like a fault and was only two scales.
+    //
+    // The formula is deliberately the same integer expression Mt32Synth uses,
+    // so the two can never disagree by one.
+    volumeValue->setText(QString::number(value * 100 / 127) + "%");
 
     // Persist once the slider settles, not on every step. A drag or a spin of
     // the mouse wheel emits valueChanged dozens of times per second, and each
@@ -1425,8 +1437,14 @@ void MainWindow::onDeviceChanged(int index)
             midiPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             imsPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             okaPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+            // GYB was missing from this list, so changing the device while a
+            // .GYB played left it sounding while the play button reset itself -
+            // sound with no transport, which is the worst kind of disagreement
+            // because neither half looks broken on its own (2026-08-21).
+            gybPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             JJoMeSynth::instance().setImsPlayer(nullptr);
             JJoMeSynth::instance().setOkaPlayer(nullptr);
+            JJoMeSynth::instance().setGybPlayer(nullptr);
             setPlaying(false);
             
             positionTimer->stop();
@@ -1437,7 +1455,13 @@ void MainWindow::onDeviceChanged(int index)
         }
 
         QString deviceName = deviceComboBox->currentText();
-        
+
+        // The MT-32 display belongs to that device and nothing else, so it goes
+        // away here and the MT-32 branch below puts it back. Doing it in one
+        // place means a device added later cannot forget to.
+        if (deviceName != Mt32Synth::DeviceLabel())
+            showMt32Display(false);
+
         if (deviceName == "[JJoMe Synth (SoundFont)]") {
             SettingsManager& settings = SettingsManager::instance();
             // Bank handled before loadFile, alongside GYB and OKA.
@@ -1514,6 +1538,49 @@ void MainWindow::onDeviceChanged(int index)
                 fallBackToInternal();
                 return;
             }
+        } else if (deviceName == Mt32Synth::DeviceLabel()) {
+            // Same shape as the SC-55 branch, minus the child process: explain
+            // what is missing rather than fail silently, and fall back to the
+            // internal synth so the user is never left with a dead device.
+            static bool bMt32DialogOpen = false;
+            if (m_isShuttingDown || bMt32DialogOpen)
+                return;
+            struct Guard {
+                bool& f;
+                explicit Guard(bool& r) : f(r) { f = true; }
+                ~Guard() { f = false; }
+            } guard(bMt32DialogOpen);
+
+            auto fallBackToInternalMt32 = [this]() {
+                deviceComboBox->blockSignals(true);
+                deviceComboBox->setCurrentIndex(0);   // [JJoMe Synth (SoundFont)]
+                deviceComboBox->blockSignals(false);
+                SettingsManager::instance().setValue(
+                    "General/lastUsedDevice", deviceComboBox->currentText());
+                midiPlayer->setUseInternalSynth(
+                    true, SettingsManager::instance()
+                              .value("Synth/SoundFontPath", "").toString());
+                midiPlayer->connectToDevice(-1);
+            };
+
+            const QString reason = Mt32Synth::UnavailableReason();
+            if (!reason.isEmpty()) {
+                QMessageBox::information(this, LSTR("MT-32", "MT-32"), reason);
+                fallBackToInternalMt32();
+                return;
+            }
+
+            midiPlayer->setUseInternalSynth(false);
+            if (!midiPlayer->connectToMt32()) {
+                QMessageBox::warning(this,
+                    LSTR("MT-32 시작 실패", "MT-32 Failed to Start"),
+                    midiPlayer->mt32Synth() ? midiPlayer->mt32Synth()->ErrorString()
+                                            : QString());
+                fallBackToInternalMt32();
+                return;
+            }
+
+            showMt32Display(true);
         } else {
             midiPlayer->setUseInternalSynth(false);
             // Connect by NAME first: on Win11's new MIDI stack the WinMM device
@@ -1590,6 +1657,16 @@ void MainWindow::loadMidiDevices()
     // rebuild wipes, so there would otherwise be nowhere to put the emulator.
     Sc55Bridge::EnsureInstallDir();
     devices.insert(1, Sc55Bridge::DeviceLabel());
+
+    // MT-32 / CM-32L through munt (mt32synth.h), on the same terms: always
+    // listed, and the ROM folder created so there is somewhere to put them.
+    //
+    // The bracketed name matters here. Windows may already be showing a device
+    // called "MT-32 Synth Emulator" - that is munt's own WinMM driver, a
+    // separate installation with nothing to do with this - and two unbracketed
+    // MT-32 entries would be indistinguishable.
+    Mt32Synth::EnsureInstallDir();
+    devices.insert(2, Mt32Synth::DeviceLabel());
 
     deviceComboBox->addItems(devices);
     deviceComboBox->setEnabled(true);
@@ -1780,14 +1857,25 @@ void MainWindow::toggleMidiMode()
         return;
     }
 
-    // Paused on this song. Reloading would start it playing, which is not what
-    // pressing a mode button should do - but leaving it alone is worse: the
-    // button would show MIDI while the paused stream is still the OPL one, and
-    // pressing play would resume that stream because playPause() sees the same
-    // path and takes its resume branch. Clear the loaded state so the next play
-    // loads it again through the engine now selected.
-    if (m_pausedByUser)
-        stop();
+    // Not playing: paused, stopped, or finished. Reloading would start it
+    // playing, which is not what pressing a mode button should do - but leaving
+    // the loaded stream alone is worse, because playPause() skips loading
+    // entirely whenever currentRawPath still matches the row it is about to
+    // play, and then resumes whatever each engine happens to be holding.
+    //
+    // **stop() does not clear currentFile or currentRawPath.** The 2026-08-19
+    // version of this called stop() and said in its comment that it was
+    // clearing the loaded state; it was not, so the hole stayed open, and it
+    // was only ever closed for the paused case anyway - a song that had merely
+    // been stopped or had reached its end never got even that.
+    //
+    // Reported 2026-08-20: play song 2 as MIDI, move to song 3 and play it as
+    // FM, stop, press MID, press play - and song 2 is heard while song 3 is the
+    // one highlighted. midiPlayer was still holding song 2 from the first step,
+    // because switching engines never touched it and the reload was skipped.
+    stop();
+    currentFile.clear();
+    currentRawPath.clear();
 }
 
 // The engine changed under the song, so it has to be loaded again.
@@ -1819,8 +1907,82 @@ void MainWindow::reloadCurrentSong(bool keepPosition)
         midiPlayer->setPosition(resumeAt);
 }
 
+// The MT-32's front panel: the twenty-character display it would be showing,
+// and a selector for which machine's ROMs to run.
+//
+// Created lazily and then kept. Recreating it each time would move it back
+// beside jmp and lose the ROM choice on screen, and the window is small enough
+// that keeping one costs nothing.
+void MainWindow::showMt32Display(bool show)
+{
+    if (!show) {
+        if (m_pMt32Display)
+            m_pMt32Display->hide();
+        return;
+    }
+
+    if (!midiPlayer || !midiPlayer->mt32Synth())
+        return;
+
+    if (!m_pMt32Display)
+    {
+        m_pMt32Display = new Mt32Display(midiPlayer->mt32Synth(), this);
+
+        // Changing the ROM rebuilds the emulated machine. Left alone, the
+        // sequencer keeps playing into it while it is torn down and built
+        // again, which is heard as the sound breaking up (reported
+        // 2026-08-21). Stop the song before the swap and start it again after.
+        //
+        // **From the beginning, not from where it was.** performSeekImmediate()
+        // replays controllers, programs and pitch bends but deliberately not
+        // SysEx, and an MT-32 file sets its parts up - and often uploads its own
+        // timbres - with SysEx in the first bars. A freshly powered machine
+        // dropped into the middle of the song would therefore be missing the
+        // setup it was given, so the honest thing is to play it again from the
+        // top. That is also what changing the ROM means: the unit was
+        // power-cycled.
+        connect(m_pMt32Display, &Mt32Display::romChangeAboutToApply,
+                this, [this]() {
+                    m_mt32RomReloadPath.clear();
+                    if (!isPlaying && !m_pausedByUser)
+                        return;
+                    m_mt32RomReloadPath = currentRawPath;
+                    stop();
+                    currentFile.clear();
+                    currentRawPath.clear();
+                });
+        connect(m_pMt32Display, &Mt32Display::romChangeApplied,
+                this, [this]() {
+                    const QString raw = m_mt32RomReloadPath;
+                    m_mt32RomReloadPath.clear();
+                    if (!raw.isEmpty())
+                        loadAndPlayByRawPath(raw);
+                });
+    }
+
+    m_pMt32Display->refreshRomList();
+    m_pMt32Display->show();
+
+    // Shown without taking focus: picking an output device should not move the
+    // keyboard away from the playlist.
+    m_pMt32Display->raise();
+}
+
 void MainWindow::showPatchDialog()
 {
+    // The event filter that handles F5 is installed on **qApp**, so it sees the
+    // key even while this dialog has focus - and `dlg` is a local, so every
+    // press built another one on top of the last (reported 2026-08-21: "F5
+    // opens a window every time I press it"). F1, F6 and F12 all carry the same
+    // guard; F5 arrived later and did not get one. Raise the open dialog
+    // instead of stacking a second, so it is obvious where the key went.
+    static PatchDialog* s_open = nullptr;
+    if (s_open) {
+        s_open->raise();
+        s_open->activateWindow();
+        return;
+    }
+
     const QString path = patchTargetPath();
     if (!gybokamidi::isSupported(path)) {
         qDebug() << "[PatchDialog] F5 applies to .GYB/.OKA played through MIDI";
@@ -1834,19 +1996,32 @@ void MainWindow::showPatchDialog()
     }
 
     PatchDialog dlg(path, plan, this);
+    s_open = &dlg;
 
     // Heard immediately: a melodic change is just a program change on the
     // channels that slot plays, so it can go straight out. Switching a row
     // between melodic and percussion moves it to another channel, which the
     // stream has to be rebuilt for - that happens on OK.
     connect(&dlg, &PatchDialog::assignmentChanged, this,
-            [this](int, const gybokamidi::Row& row) {
+            [this, path](int, const gybokamidi::Row& row) {
                 if (row.drum || !midiPlayer) return;
+
+                // In MT-32 mode the tone number IS the program change and there
+                // is no bank - the same substitution toMidi() makes when it
+                // builds the stream, so what is heard now and what is heard
+                // after a rebuild agree.
+                const bool mt32 =
+                    gybokamidi::targetModule(path) == gybokamidi::Target::Mt32;
+                const int bank    = mt32 ? 0 : row.bankMsb;
+                const int program = mt32 ? qBound(0, row.mt32Program - 1, 127)
+                                         : row.program;
+
                 for (int ch : row.channels)
-                    midiPlayer->sendLiveProgramChange(ch, row.bankMsb, row.program);
+                    midiPlayer->sendLiveProgramChange(ch, bank, program);
             });
 
     dlg.exec();   // the dialog writes its own file, and only when asked to
+    s_open = nullptr;
 
     // Melodic changes were already heard as they were made; a row moved between
     // melodic and percussion plays on a different channel, so the stream has to

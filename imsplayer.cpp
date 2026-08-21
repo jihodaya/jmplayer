@@ -851,32 +851,79 @@ void ImsPlayer::renderAudio(float* output, unsigned int frameCount)
     short shortBuf[16384];
     unsigned int framesToRender = std::min(frameCount, 8192u);
 
+    // Render the buffer in segments that END where a sequencer tick falls,
+    // instead of firing every tick in the buffer and then rendering the whole
+    // thing afterwards. The old order put every tick's register writes at the
+    // START of the buffer, so note timing was quantised to the audio period -
+    // and since the tick period does not divide the period evenly, the number
+    // of ticks per buffer alternates and the error is uneven. That is the
+    // "irregular tempo delay" reported on 2026-08-21 for .IMS/.ROL/.SOP.
+    //
+    // It is a regression, and this is not where it came from: this loop is
+    // unchanged since R2.5k.2. What changed is Audio/BufferMs, added 2026-08-18
+    // with a default of 40 ms where miniaudio's own default is about 10 - so
+    // the same flaw went from ~5 ticks of clumping to ~19, and became audible.
+    // The buffer setting is worth keeping (it is real protection against
+    // dropouts), so the clocking is fixed here rather than the buffer shortened.
+    //
+    // Chunking costs nothing in accuracy: CNemuopl::update() is one call to
+    // OPL3_GenerateStream and all of the chip state lives in the emulator, so
+    // N small calls are sample-identical to one big one. Only the position of
+    // the register writes moves, which is the whole point.
     float currentCounter = m_sampleCounter.load();
-    currentCounter += (float)framesToRender;
-
-    int maxTicks = 100;
     bool logicUpdated = false;
-    while (maxTicks-- > 0) {
+    unsigned int rendered = 0;
+    bool sequencerDone = false;
+
+    // Each tick consumes at least one frame of the counter (samplesPerTick is
+    // clamped below), so this can only run out on a pathological refresh rate.
+    int tickBudget = (int)framesToRender + 8;
+
+    while (rendered < framesToRender) {
         float refresh = m_player ? m_player->getrefresh() : 70.0f;
         if (refresh < 1.0f) refresh = 70.0f;
         float samplesPerTick = (float)m_sampleRate / (refresh * ((float)m_userTempoScale.load() / 100.0f));
+        if (samplesPerTick < 1.0f) samplesPerTick = 1.0f;
 
-        if (currentCounter < samplesPerTick) break;
-
-        // Stamp this tick's register writes with the song clock, so the OPL
-        // tunnel ships them as one timed batch (see OplTunnelSender::setNowMs).
-        OplTunnelSender::instance().setNowMs(
-            (uint32_t)(m_tunnelClockSamples * 1000.0 / (double)m_sampleRate));
-
-        if (!m_player->update()) {
-            m_playing = false;
-            QMetaObject::invokeMethod(this, "finished", Qt::QueuedConnection);
-            break;
+        // How far can we render before the next tick is due?
+        unsigned int seg = framesToRender - rendered;
+        if (!sequencerDone) {
+            float need = samplesPerTick - currentCounter;
+            if (need <= 0.0f) {
+                seg = 0;   // a tick is already due at this exact frame
+            } else {
+                unsigned int untilTick = (unsigned int)std::ceil(need);
+                if (untilTick < seg) seg = untilTick;
+            }
         }
-        currentCounter -= samplesPerTick;
-        m_tunnelClockSamples += (double)samplesPerTick;
-        m_currentTick.fetch_add(1);
-        logicUpdated = true;
+
+        if (seg > 0) {
+            m_opl->update(shortBuf + rendered * 2, (int)seg);
+            rendered += seg;
+            currentCounter += (float)seg;
+        }
+
+        if (sequencerDone) continue;
+
+        while (currentCounter >= samplesPerTick && tickBudget > 0) {
+            --tickBudget;
+            // Stamp this tick's register writes with the song clock, so the OPL
+            // tunnel ships them as one timed batch (see OplTunnelSender::setNowMs).
+            OplTunnelSender::instance().setNowMs(
+                (uint32_t)(m_tunnelClockSamples * 1000.0 / (double)m_sampleRate));
+
+            if (!m_player->update()) {
+                m_playing = false;
+                QMetaObject::invokeMethod(this, "finished", Qt::QueuedConnection);
+                sequencerDone = true;   // render the rest of the buffer as tail
+                break;
+            }
+            currentCounter -= samplesPerTick;
+            m_tunnelClockSamples += (double)samplesPerTick;
+            m_currentTick.fetch_add(1);
+            logicUpdated = true;
+        }
+        if (tickBudget <= 0) sequencerDone = true;
     }
 
     // Refresh the channel-monitor snapshot at display speed (~30/s), not once
@@ -1016,8 +1063,7 @@ void ImsPlayer::renderAudio(float* output, unsigned int frameCount)
         }
     }
 
-    // Render raw OPL audio
-    m_opl->update(shortBuf, framesToRender);
+    // (the OPL audio was rendered above, interleaved with the sequencer ticks)
 
     // [CRITICAL] Merged Processing Loop: Fade-in -> DSP -> Volume
     float volScale = m_volume.load() / 100.0f;

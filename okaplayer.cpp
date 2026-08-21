@@ -256,6 +256,16 @@ public:
     // switched while a song is already playing. Without it the chip has never
     // seen the operator or frequency registers of the notes now sounding, and
     // only whatever arrives next would reach it.
+    // Key-off every voice on the mirror chip, and drop its rhythm bits. See the
+    // same function in gybplayer.cpp for why leaving mode 10 needs this.
+    void silenceSecondChip() {
+        for (int ch = 0; ch < 9; ++ch) {
+            const int regB = 0x1B0 + ch;
+            CNemuopl::write(regB, m_shadow0[0xB0 + ch] & ~0x20);
+        }
+        CNemuopl::write(0x1BD, m_shadow0[0xBD] & ~0x1F);   // rhythm key-ons
+    }
+
     void rebuildSecondChip() {
         for (int r = 0x20; r <= 0xF5; ++r) {
             const int b = r & 0xFF;
@@ -865,6 +875,9 @@ void OkaPlayer::forceUpdateOplStereo()
             int finalVal = (origVal & ~0x30) | panBit;
             m_opl->CNemuopl::write(reg, finalVal);
         }
-        if (JJoMeSynth::instance().getOplStereoMode() == 10) m_opl->rebuildSecondChip();
+        if (JJoMeSynth::instance().getOplStereoMode() == 10)
+            m_opl->rebuildSecondChip();
+        else
+            m_opl->silenceSecondChip();
     }
 }

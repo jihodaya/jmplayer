@@ -166,7 +166,36 @@ private:
     // Panel-GUI window scale passed to the patched emulator's --lcd-scale. The
     // artwork fixes the window at 1120x233; 0.75 keeps it readable while
     // leaving room for jmp. Override with ini key Sc55/WindowScale.
+    //
+    // This was NOT free before 2026-08-20, and the reason is worth keeping.
+    // Any scale other than 1.0 makes SDL filter-resample the panel artwork on
+    // every frame, and the emulator did that with `SDL_CreateRenderer(..., 0)` -
+    // which may quietly fall back to the software renderer - and with
+    // `RENDER_SCALE_QUALITY=BEST`, which on D3D9 means anisotropic filtering.
+    // On the reporter's i5-8250U that was enough to make the emulator lose
+    // realtime: the music slowed and crackled whenever a browser started.
+    //
+    // It never showed as CPU time - idle was 58.3 % at 0.75 and 58.1 % at 1.0 -
+    // because the cost landed on the integrated GPU, which shares its power
+    // budget with the CPU cores. Setting 1.0 was what he first heard fix it.
+    //
+    // The emulator patch now asks for acceleration explicitly, uses linear
+    // filtering, and redraws at 33 fps instead of 66, so the default goes back
+    // to 0.75. **That means this default assumes a patched emulator built on or
+    // after 2026-08-20**; with an older one, 0.75 can still cost what it did.
+    // Set Sc55/WindowScale = 1.0 to take the scaling out of the picture.
     static constexpr double DefaultWindowScale = 0.75;
+
+    // Sc55/HidePanel - run the emulator with --no-lcd, no window at all.
+    //
+    // The panel is redrawn every 15 ms whether or not anyone is looking at it,
+    // and on that same laptop the thread doing it used 4.81 s of CPU in a 29 s
+    // window - about 16 % of a core, on a machine that has none to spare. Off by
+    // default because it costs the SC-55 display; worth it if the sound still
+    // breaks up.
+    static constexpr bool DefaultHidePanel = false;
+
+    bool m_bHidePanel = DefaultHidePanel;
 };
 
 #endif // SC55BRIDGE_H

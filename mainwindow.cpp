@@ -6,6 +6,7 @@
 #include "lyricswindow.h"
 #include "constants.h"
 #include "settingsmanager.h"
+#include "slowlog.h"
 #include "oplstereodialog.h"
 #include "midiresetdialog.h"
 #include <QCloseEvent>
@@ -805,7 +806,12 @@ void MainWindow::setupUI()
     volumeSlider = new QSlider(Qt::Horizontal, this);
     volumeSlider->setRange(0, 127);
     volumeSlider->setValue(114);   // default 90% of 127
-    volumeValue = new QLabel("114", this);
+    // Percentage, matching what the MT-32's panel counts in - see
+    // onVolumeChanged, which owns the formula.
+    volumeValue = new QLabel("89%", this);
+    // Fixed width, or the slider shifts as the number goes 9% -> 89% -> 100%.
+    volumeValue->setMinimumWidth(volumeValue->fontMetrics().horizontalAdvance("100%"));
+    volumeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     volumeLayout->addWidget(volumeLabel);
     volumeLayout->addWidget(volumeSlider);
@@ -957,6 +963,9 @@ void MainWindow::setupUI()
 
     // Install event filter to capture arrow keys globally
     qApp->installEventFilter(this);
+
+    // Records anything that keeps the event loop from running (see slowlog.h).
+    SlowLog::startWatchdog(this);
 }
 
 
@@ -1157,6 +1166,7 @@ QString MainWindow::getActualExecutablePath()
 
 void MainWindow::saveSettings()
 {
+    JMP_SLOW("saveSettings");
     SettingsManager& settings = SettingsManager::instance();
 
     // Save General settings first
@@ -1780,7 +1790,9 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         // (hasFocus()??searchBox媛€ 湲곕낯 ?ъ빱?ㅻ? 媛€吏?????긽 true媛€ ?섏뼱 ?ㅼ옉??
         // While a modal dialog (file picker, message box, settings dialog) is open,
         // do NOT hijack Enter/Space/Delete/arrows — the dialog must keep them
-        // (e.g. Enter = OK). F1/F12 above keep their own re-entry guards.
+        // (e.g. Enter = OK). F1/F6/F12 above keep their own re-entry guards, and
+        // so does showPatchDialog() for F5 - every key that opens a dialog needs
+        // one, because this filter is on qApp and fires while the dialog is up.
         static QElapsedTimer modalGraceTimer;   // restarted on every key seen while a modal is up
         if (QApplication::activeModalWidget() != nullptr) {
             modalGraceTimer.restart();
@@ -1987,7 +1999,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v2.7d";
+    QString title = "🎵 JJoMe MIDI Player v3.0.0 beta";
     
     if (currentNode) {
         if (currentNode->isFolder) {

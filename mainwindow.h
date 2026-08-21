@@ -126,6 +126,13 @@ private slots:
     void toggleMidiMode();
     void updateMidiModeButtonStyle();
     void showPatchDialog();
+
+    // The MT-32's front panel (mt32display.h). Created the first time it is
+    // wanted and kept afterwards, so the user's chosen ROM and window position
+    // survive switching devices back and forth. Shown only while the MT-32 is
+    // the selected device.
+    void showMt32Display(bool show);
+
     void reloadCurrentSong(bool keepPosition = false);
     void onLyricChannelChanged(int newChannel); // NOB 채널 변경
     void updateWindowTitle();
@@ -268,6 +275,12 @@ public:
     void setPlaying(bool playing);
 
 private:
+    // MT-32 front panel, owned by this window (Qt parent) so it closes with it.
+    class Mt32Display* m_pMt32Display = nullptr;
+    // The song to start again once a ROM swap has finished. Empty when nothing
+    // was playing, which is what makes the swap a no-op for the transport.
+    QString m_mt32RomReloadPath;
+
     // Current state
     bool isPlaying;
     bool m_isShuttingDown;

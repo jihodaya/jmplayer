@@ -153,4 +153,28 @@ GmChoice toGeneralMidi(int tone)
     return out;
 }
 
+int fromGeneralMidi(int gmProgram)
+{
+    if (gmProgram < 0 || gmProgram > 127) return 0;
+
+    // First match wins, and the table is in tone order, so a GM program that
+    // several tones map to resolves to the lowest-numbered one - which for the
+    // MT-32 is the plainest of the set (Acou Piano1 before Piano2, Elec Org1
+    // before Org2). That is the right default to hand someone who has not
+    // chosen yet.
+    //
+    // Exact equivalents are preferred over the ones flagged as judgement calls,
+    // so the scan runs twice rather than taking whatever comes first.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool wantExact = (pass == 0);
+        for (int i = 0; i < 128; ++i) {
+            const Row& r = kToGm[i];
+            if (r.drumNote >= 0) continue;          // percussion, not a melodic tone
+            if (r.exact != wantExact) continue;
+            if (r.program == gmProgram) return i + 1;
+        }
+    }
+    return 0;
+}
+
 }  // namespace mt32map

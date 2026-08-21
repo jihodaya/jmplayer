@@ -19,6 +19,7 @@
 #include "jjomesynth.h"
 #include "midireset.h"
 #include "sc55bridge.h"
+#include "mt32synth.h"
 
 #pragma comment(lib, "winmm.lib")
 
@@ -116,6 +117,14 @@ public:
     bool connectToSc55();
     Sc55Bridge* sc55Bridge() const { return m_pSc55; }
     bool isUsingSc55() const { return m_pSc55 && m_bUseSc55; }
+
+    // MT-32 / CM-32L through munt (mt32synth.h) - a fourth destination. Unlike
+    // the SC-55 this one is a library in this process, so there is nothing to
+    // launch and nothing to connect to: it renders into the same audio device
+    // the internal synth uses, via JJoMeSynth.
+    bool connectToMt32();
+    Mt32Synth* mt32Synth() const { return m_pMt32; }
+    bool isUsingMt32() const { return m_pMt32 && m_bUseMt32; }
 
     bool loadMidiFile(const QString &filename);
     void setIsNobFile(bool isNob); // NOB 파일 여부 설정
@@ -279,6 +288,11 @@ private:
     // chosen device.
     Sc55Bridge* m_pSc55 = nullptr;
     bool m_bUseSc55 = false;
+
+    // munt, in this process (mt32synth.h). Created lazily like the SC-55 bridge
+    // and kept while it remains the chosen device.
+    Mt32Synth* m_pMt32 = nullptr;
+    bool m_bUseMt32 = false;
 
     // Sound-module reset before each new song (midireset/midireset.h). Wired
     // to sendRawSysEx in the constructor; sent from play()'s new-song branch.

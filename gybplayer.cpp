@@ -278,6 +278,18 @@ public:
     // switched while a song is already playing. Without it the chip has never
     // seen the operator or frequency registers of the notes now sounding, and
     // only whatever arrives next would reach it.
+    // Key-off every voice on the mirror chip, and drop its rhythm bits.
+    //
+    // Only the key-on bit is cleared: the shadow keeps the operator settings so
+    // that re-entering mode 10 does not have to rebuild everything from silence.
+    void silenceSecondChip() {
+        for (int ch = 0; ch < 9; ++ch) {
+            const int regB = 0x1B0 + ch;
+            CNemuopl::write(regB, m_shadow0[0xB0 + ch] & ~0x20);
+        }
+        CNemuopl::write(0x1BD, m_shadow0[0xBD] & ~0x1F);   // rhythm key-ons
+    }
+
     void rebuildSecondChip() {
         for (int r = 0x20; r <= 0xF5; ++r) {
             const int b = r & 0xFF;
@@ -912,6 +924,19 @@ void GybPlayer::forceUpdateOplStereo()
             int finalVal = (origVal & ~0x30) | panBit;
             m_opl->CNemuopl::write(reg, finalVal);
         }
-        if (JJoMeSynth::instance().getOplStereoMode() == 10) m_opl->rebuildSecondChip();
+        if (JJoMeSynth::instance().getOplStereoMode() == 10) {
+            m_opl->rebuildSecondChip();
+        } else {
+            // Leaving mode 10: silence the mirror chip.
+            //
+            // Nothing else ever writes bank 1 here - GAYOBANG is a nine-channel
+            // driver, so the second chip exists only as mode 10's detuned
+            // mirror. Modes 1-9 touch bank 0 alone, which left whatever was
+            // sounding on bank 1 keyed on with no one able to release it: a
+            // held organ or string note that rang on for the rest of the
+            // session (2026-08-21). Clearing the key-on bit is enough; the
+            // operators can keep their settings.
+            m_opl->silenceSecondChip();
+        }
     }
 }
