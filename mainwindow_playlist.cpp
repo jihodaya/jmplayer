@@ -11,6 +11,7 @@
 #include "slowlog.h"
 #include "oplstereodialog.h"
 #include <QCloseEvent>
+#include <QLocale>
 #include "nobfilehandler.h"
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
@@ -901,6 +902,54 @@ void MainWindow::addFileToCurrentNode(const QString &filePath)
     triggerSavePlaylistTree();
 }
 
+// Report a folder scan's progress on its own placeholder row.
+//
+// Added 2026-08-21 after adding D:\mt32\chiptune-midi - 114,727 files across
+// 8,005 folders - showed a bare hourglass for minutes with no way to tell a
+// working scan from a hung one. The scan itself runs on a QThread, so the
+// window was never frozen; there was simply nothing to look at.
+//
+// The count comes from a first pass that only names files (about a second for
+// this folder), because a number counting upwards with no denominator still
+// does not say when it ends.
+void MainWindow::wireScanProgress(FolderScanner* scanner, PlaylistTreeNode* loadingNode)
+{
+    const QString base = loadingNode->name;
+
+    connect(scanner, &FolderScanner::progress, this,
+            [this, loadingNode, base](int done, int total) {
+        // Queued from the scanner thread. scanFinished() is emitted after the
+        // last progress and travels the same queue, so the node cannot already
+        // be deleted here - the set is checked anyway, since being wrong about
+        // that would be a use-after-free rather than a wrong label.
+        if (!m_scanningNodes.contains(loadingNode))
+            return;
+
+        const QLocale loc;
+        const QString suffix = (total <= 0)
+            ? LSTR(u8" (세는 중...)", " (counting...)")
+            : QString(" (%1 / %2)").arg(loc.toString(done), loc.toString(total));
+
+        loadingNode->name = base + suffix;
+
+        // Repaint that one row. setRows() is the only other way to change what
+        // is shown and it resets the model - throwing away the selection and
+        // the scroll position, and walking the whole tree through
+        // updateUIFromCurrentNode() - which is not a thing to do ten times a
+        // second. If the row is not on screen the node's name is still updated,
+        // so navigating back to it shows the current figure.
+        if (!playlistModel)
+            return;
+        const QVector<PlaylistRow>& rows = playlistModel->rows();
+        for (int i = 0; i < rows.size(); ++i) {
+            if (rows[i].type == FOLDER && rows[i].path == loadingNode->fullPath) {
+                playlistModel->updateRow(i, loadingNode->name);
+                break;
+            }
+        }
+    });
+}
+
 void MainWindow::addFolderToCurrentNode(const QString &folderPath)
 {
     QFileInfo folderInfo(folderPath);
@@ -921,10 +970,13 @@ void MainWindow::addFolderToCurrentNode(const QString &folderPath)
     updateUIFromCurrentNode();
 
     // Start background scanner
+    m_scanningNodes.insert(loadingNode);
     FolderScanner* scanner = new FolderScanner(folderPath, this);
+    wireScanProgress(scanner, loadingNode);
     connect(scanner, &FolderScanner::scanFinished, this, [this, loadingNode](FolderScanner* s) {
         PlaylistTreeNode* resultNode = s->getResultNode();
-        
+        m_scanningNodes.remove(loadingNode);
+
         // Remove loading node
         for (int i = 0; i < currentNode->children.size(); ++i) {
             if (currentNode->children[i] == loadingNode) {
@@ -1134,11 +1186,14 @@ void MainWindow::addFolderToCurrentNodeWithoutSave(const QString &folderPath)
     updateUIFromCurrentNode();
 
     // Start background scanner
+    m_scanningNodes.insert(loadingNode);
     FolderScanner* scanner = new FolderScanner(folderPath, this);
+    wireScanProgress(scanner, loadingNode);
     // Fix: Use parentNode captured at start to ensure correct removal even if user navigates away
     PlaylistTreeNode* targetParent = currentNode;
     connect(scanner, &FolderScanner::scanFinished, this, [this, loadingNode, targetParent](FolderScanner* s) {
         PlaylistTreeNode* resultNode = s->getResultNode();
+        m_scanningNodes.remove(loadingNode);
         
         // Remove loading node from the correct parent
         for (int i = 0; i < targetParent->children.size(); ++i) {
@@ -1784,6 +1839,12 @@ QJsonObject MainWindow::nodeToJson(PlaylistTreeNode* node)
     // Convert children
     QJsonArray childrenArray;
     for (auto* child : node->children) {
+        // A folder still being scanned is a placeholder whose name is a live
+        // progress counter. Writing it out would put "... (12,431 / 114,727)"
+        // in playlist.json permanently, and the real node replaces it moments
+        // later anyway.
+        if (m_scanningNodes.contains(child))
+            continue;
         childrenArray.append(nodeToJson(child));
     }
     nodeJson["children"] = childrenArray;

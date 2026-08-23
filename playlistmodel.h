@@ -40,6 +40,14 @@ public:
     void clearRows();
     void appendRow(const PlaylistRow &row);
 
+    // Change one row's display text in place. setRows() is the only other way
+    // to alter what is shown, and it resets the model - which throws away the
+    // selection and the scroll position and, through
+    // updateUIFromCurrentNode(), walks the whole playlist tree. That is far too
+    // much for a folder scan's progress counter ticking ten times a second, so
+    // this exists to repaint exactly one row. Returns false if the row is gone.
+    bool updateRow(int row, const QString &name);
+
     const QVector<PlaylistRow> &rows() const { return m_rows; }
 
 private:

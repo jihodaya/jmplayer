@@ -166,7 +166,14 @@ for %%D in (libmt32emu-2.dll libmt32emu.dll) do (
     if exist "%BUILD_DIR%\_deps\munt-build\%%D" copy "%BUILD_DIR%\_deps\munt-build\%%D" "%RELEASE_DIR%\\" > nul
 )
 if not exist "%RELEASE_DIR%\MT32ROMs" mkdir "%RELEASE_DIR%\MT32ROMs"
-copy "%SCRIPT_DIR%\MT32ROMs_README.txt" "%RELEASE_DIR%\MT32ROMs\읽어보세요.txt" > nul
+REM Both this name and the file's contents are ASCII on purpose. cmd.exe reads
+REM a batch file's bytes in the console OEM codepage (CP949 on a Korean
+REM install) while this file is UTF-8, so a Korean literal here reaches the
+REM filesystem as mojibake - this line used to name the copy in Korean and
+REM produced an unopenable name in MT32ROMs (reported 2026-08-21).
+REM NukedSC55\README.txt next to it has always been ASCII and has always been
+REM fine. Keep every literal in these scripts ASCII.
+copy "%SCRIPT_DIR%\MT32ROMs_README.txt" "%RELEASE_DIR%\MT32ROMs\README.txt" > nul
 
 REM Nuked-SC55 drop folder. The emulator itself is NOT shipped - it is not
 REM public domain and jmp is - so only the folder and its note go out.

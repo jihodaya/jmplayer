@@ -12,6 +12,18 @@ int PlaylistModel::rowCount(const QModelIndex &parent) const
     return m_rows.size();
 }
 
+bool PlaylistModel::updateRow(int row, const QString &name)
+{
+    if (row < 0 || row >= m_rows.size())
+        return false;
+    if (m_rows[row].name == name)
+        return true;
+    m_rows[row].name = name;
+    const QModelIndex idx = index(row);
+    emit dataChanged(idx, idx, {Qt::DisplayRole, Qt::EditRole});
+    return true;
+}
+
 QVariant PlaylistModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_rows.size())

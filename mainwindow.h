@@ -133,6 +133,9 @@ private slots:
     // the selected device.
     void showMt32Display(bool show);
 
+    // Makes a folder scan's placeholder row report how far it has got.
+    void wireScanProgress(class FolderScanner* scanner, PlaylistTreeNode* loadingNode);
+
     void reloadCurrentSong(bool keepPosition = false);
     void onLyricChannelChanged(int newChannel); // NOB 채널 변경
     void updateWindowTitle();
@@ -280,6 +283,12 @@ private:
     // The song to start again once a ROM swap has finished. Empty when nothing
     // was playing, which is what makes the swap a no-op for the transport.
     QString m_mt32RomReloadPath;
+
+    // Placeholder nodes standing in for a folder still being scanned. Their
+    // names are a live progress counter, so savePlaylistTree() must not write
+    // them out - "chiptune-midi (12,431 / 114,727)" would otherwise be the name
+    // in playlist.json for good.
+    QSet<PlaylistTreeNode*> m_scanningNodes;
 
     // Current state
     bool isPlaying;

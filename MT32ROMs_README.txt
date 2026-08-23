@@ -1,52 +1,19 @@
-이 폴더에 MT-32 롬을 넣으세요
-Put your MT-32 ROMs in this folder
+Put your MT-32 / CM-32L ROMs in this folder
 ================================================================
 
-jmp의 MT-32 엔진은 munt(mt32emu)를 씁니다. 에뮬레이터는 함께
-배포되지만(LGPL-2.1) 롬은 롤랜드의 저작물이라 직접 구하셔야 합니다.
+One control ROM and one PCM ROM, as a pair:
 
-Nuked-SC55와 달리 에뮬레이터를 따로 빌드하실 필요는 없습니다.
-롬만 넣으면 됩니다.
+  MT-32     MT32_CONTROL.ROM   +  MT32_PCM.ROM
+  CM-32L    CM32L_CONTROL.ROM  +  CM32L_PCM.ROM
 
+Filenames do not matter - the ROMs are identified by their content,
+so whatever your dump is called will work. Several pairs can sit
+here together and you can pick between them in the MT-32 window.
 
-넣을 것
-----------------------------------------------------------------
-컨트롤 롬 하나와 PCM 롬 하나가 한 쌍이어야 합니다.
+Then choose [MT32 JMP] in the output device list.
 
-  MT-32 구형    MT32_CONTROL.ROM + MT32_PCM.ROM
-  MT-32 신형    같은 이름의 v2.x 롬
-  CM-32L        CM32L_CONTROL.ROM + CM32L_PCM.ROM
+Split dumps (upper half / lower half) are ignored - use merged files.
 
-파일 이름은 상관없습니다. 내용을 해시로 판별하므로 아무 이름이나
-두셔도 됩니다.
-
-여러 세트를 같이 넣어두면 MT-32 창에서 골라 쓸 수 있습니다.
-(구형 MT-32와 CM-32L은 같은 곡이라도 소리가 꽤 다릅니다 - 1980년대
-곡은 대개 구형 MT-32를 염두에 두고 만들어졌습니다.)
-
-
-쓰는 법
-----------------------------------------------------------------
-출력 장치 목록에서 [MT-32 (내장)] 을 고르면 됩니다.
-
-같이 뜨는 창이 MT-32의 20자 디스플레이입니다. 실제 기기가 보여줄
-내용이 그대로 나오고, 곡이 보내는 문구도 여기 표시됩니다.
-창 안의 콤보로 롬 세트를 바꿀 수 있습니다.
-
-목록에 "MT-32 Synth Emulator" 라는 항목이 따로 보인다면 그것은
-munt를 윈도우 MIDI 드라이버로 설치하신 것으로, 이것과는 별개입니다.
-구분을 위해 우리 것은 대괄호가 붙어 있습니다.
-
-
-아직 안 되는 것
-----------------------------------------------------------------
-반쪽으로 나뉜 덤프(상위 절반 / 하위 절반)는 지원하지 않습니다.
-합쳐진 파일을 넣어주세요. 나뉜 파일은 조용히 무시됩니다.
-
-
-저작권 / 라이선스
-----------------------------------------------------------------
-  munt (mt32emu)   https://github.com/munt/munt
-                   LGPL-2.1 - 그래서 함께 배포할 수 있습니다.
-
-  롬               롤랜드의 저작물. 배포하지 않습니다.
+The ROMs are Roland's and are not included with jmp. The emulator
+itself is munt (mt32emu, LGPL-2.1) and ships with jmp, so there is
+nothing to build.   https://github.com/munt/munt
