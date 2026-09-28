@@ -76,9 +76,17 @@ static void cleanLeftoverTempMidi()
     QDir tempDir(QCoreApplication::applicationDirPath() + "/temp");
     if (!tempDir.exists())
         return;
+    // One entry per QTemporaryFile template under temp/ - midiplayer.cpp (nob,
+    // oka, opl, mdx, rcp), mainwindow_playback.cpp (a song unzipped to play)
+    // and mainwindow_lyrics.cpp (its .iss). A new template must be added here
+    // too: Qt removes these on a normal exit, so only a crash leaves one
+    // behind, and nothing else will ever clear it. The last four were missing
+    // until 2026-09-28. "jJomeZip_*" does not match "jJomeZipIss_", hence both.
     const QStringList stale =
         tempDir.entryList(QStringList() << "nob_*.mid" << "oka_*.mid"
-                                        << "opl_*.mid", QDir::Files);
+                                        << "opl_*.mid" << "mdx_*.mid"
+                                        << "rcp_*.mid" << "jJomeZip_*"
+                                        << "jJomeZipIss_*", QDir::Files);
     for (const QString& name : stale)
         tempDir.remove(name);
 }
