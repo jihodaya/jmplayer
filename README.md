@@ -25,6 +25,11 @@ for where to put your own.
 
 📖 **User manual:** [English](docs/MANUAL.en.md) · [한국어](docs/MANUAL.ko.md)
 
+🔍 **Format notes:** [`docs/formats/`](docs/formats/README.md) — what was worked out
+about each file format (GYB, OKA/OKM/OKW, NOB, ISS, RCP, Ballade SNG, MDX, MLD MDZ),
+mostly by decompiling the original programs and checking against their own output.
+Written in Korean, under CC BY 4.0.
+
 ## 🎵 Supported formats
 
 | Extension | What it is | Played through |
@@ -69,6 +74,8 @@ Details, and how to point the scripts at a Qt installed elsewhere, are in
 ## 📄 License & credits
 
 * **Project code:** **MIT License** (see [`LICENSE`](LICENSE)).
+* **Format notes** in `docs/formats/`: **CC BY 4.0** — reuse freely, but credit
+  JJOME (jihodaya) and link back here.
 * **Third-party code:** Qt 6 (LGPL-3.0) and munt (LGPL-2.1) are linked as DLLs.
   AdPlug, libbinio, Nuked-OPM and Nuked-OPN2 (LGPL-2.1) are compiled in - the
   complete source is here, so the program can be rebuilt against modified
@@ -114,6 +121,11 @@ MT-32 롬과 Nuked-SC55 에뮬레이터는 **포함되어 있지 않습니다**.
 
 📖 **사용자 매뉴얼:** [한국어](docs/MANUAL.ko.md) · [English](docs/MANUAL.en.md)
 
+🔍 **포맷 분석 기록:** [`docs/formats/`](docs/formats/README.md) — 각 파일 포맷(GYB,
+OKA/OKM/OKW, NOB, ISS, RCP, Ballade SNG, MDX, MLD MDZ)에 대해 알아낸 것을 정리했습니다.
+대부분 원본 프로그램을 디컴파일하고 원본이 만든 결과와 대조해서 알아낸 내용입니다.
+CC BY 4.0으로 공개합니다.
+
 ## 🎵 지원 포맷
 
 | 확장자 | 설명 | 연주 음원 |
@@ -158,6 +170,8 @@ cd jmplayer
 ## 📄 라이선스 및 제공자 정보
 
 * **프로젝트 소스 코드:** **MIT 라이선스**([`LICENSE`](LICENSE) 참고).
+* **포맷 분석 기록**(`docs/formats/`): **CC BY 4.0** — 자유롭게 쓰되 작성자
+  JJOME (jihodaya)와 출처를 밝혀 주세요.
 * **외부 코드:** Qt 6(LGPL-3.0)와 munt(LGPL-2.1)는 DLL로 연결됩니다.
   AdPlug·libbinio·Nuked-OPM·Nuked-OPN2(LGPL-2.1)는 프로그램에 함께 컴파일되며,
   전체 소스가 이 저장소에 공개되어 있어 수정한 라이브러리로 다시 빌드할 수

@@ -8,6 +8,18 @@ The source code for the JJoMe MIDI Player project is released under the **MIT Li
 
 There is no warranty for this software. Use at your own risk.
 
+## Format Notes (`docs/formats/`)
+
+The file-format notes in [`docs/formats/`](docs/formats/README.md) are licensed
+separately under **Creative Commons Attribution 4.0 International (CC BY 4.0)**
+— <https://creativecommons.org/licenses/by/4.0/>. You may copy, adapt and share
+them for any purpose, including commercially, provided you credit the author
+and link to the source:
+
+```
+JJOME (jihodaya), "JMPlayer format notes", 2026. https://github.com/jihodaya/jmplayer
+```
+
 ## Dependency Licenses
 
 JJoMe MIDI Player is developed using the following libraries and resources:
