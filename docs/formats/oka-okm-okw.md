@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: NORE45.EXE 디컴파일, 기준 파일 86개를 바이트 단위로 다시 만들어 보는 왕복 검증, 라이브러리 `.OKA` 117곡 실측.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/oka-okm-okw.md)
 
 옥소리 노래방 NORE45의 곡 파일이다. 세 확장자가 **같은 컨테이너**를 쓴다. 안에는
 **XOR로 가린 표준 MIDI 파일(SMF)**과 가사, 악기가 들어 있다.

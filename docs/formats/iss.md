@@ -2,7 +2,7 @@
 
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/iss.md)
 
 한울소리 IMS 음악 파일(`.IMS`)과 같은 이름으로 짝을 이루는 **노래방 가사 파일**이다.
 `.IMS` 자체는 AdPlug가 이미 재생하는 공개된 포맷이라 여기서는 다루지 않는다.

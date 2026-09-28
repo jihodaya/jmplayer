@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: DOS 변환기 **SNG2S 3.3**(M. Saito, 1993)을 msdos-player로 실행해 얻은 참조 MIDI 17곡과 대조. 파일 일부를 고쳐 SNG2S에 넣어 보는 방식으로 필드를 알아냄.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/sng-ballade.md)
 
 다이나웨어(Dynaware)의 PC-9801용 시퀀서 **Ballade**와, Roland의 ミュージくん /
 ミュージ郎 패키지에 들어 있던 같은 엔진의 곡 파일이다. Recomposer와 확장자가

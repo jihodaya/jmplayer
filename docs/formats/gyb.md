@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: GAYOBANG.EXE 디컴파일, DOSBox에서 원본으로 녹음한 소리와의 비교, 라이브러리 334곡 실측.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/gyb.md)
 
 1990년대 국산 DOS 노래방 프로그램 **가요방**(GAYOBANG.EXE)의 곡 파일이다.
 애드립(OPL2/OPL3) FM 음원으로 연주하고, 파일 안에 **악기 데이터와 가사**를 함께
@@ -101,7 +101,7 @@ jmpconv 쪽은 원본이 만든 변환 결과와 음표 74,566개가 모두 일�
 TL' = 63 − ((볼륨 × (63 − TL) + 64) >> 7)
 ```
 
-✅ dB 표를 쓰는 로그 곡선이 아니다. 어떤 오퍼레이터에 적용하는지는 3-3 참고.
+✅ dB 표를 쓰는 로그 곡선이 아니다. 어떤 오퍼레이터에 적용하는지는 5절 4번 참고.
 
 **피치 벤드**: 파일 값 0~20, **10이 중앙**. GAYOBANG은 `값 × 0x333`(한 칸에 819)
 을 AdLib 라이브러리의 14비트 벤드(중앙 `0x2000`)로 넘긴다 (GAYOBANG.c:30115). ✅

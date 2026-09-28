@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: MLD 패키지(`MLD247.LZH`, NFG Games의 x68pub 미러 `SOUND/MLD/`)의 **MML 컴파일러 `mlc.x`**와 역변환기 **`mdz2mus.x`**를 run68x로 Windows에서 실행. MML을 컴파일해서 나온 바이트를 읽고, 176곡을 역변환→재컴파일해 트랙별 틱 수를 대조.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/mdz-mld.md)
 
 **MLD**는 LUM2가 만든(1990~93) X68000 음악 드라이버다. OPM(FM), ADPCM, **외부 MIDI
 모듈**을 **한 곡 안에서 동시에** 움직인다. 매뉴얼은 스스로를 "MXDRV + MDD 같은"

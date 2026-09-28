@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: MXDRV 드라이버 소스(mxdrv200b)의 명령 점프 테이블, **mxwav**(원본 드라이버 + X68Sound 렌더러)와 101곡 대조, 직접 만든 한두 음짜리 MDX로 원본 반응 확인.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/mdx.md)
 
 X68000의 표준 음악 드라이버 **MXDRV**의 곡 파일이다. YM2151(OPM) FM 8채널과
 ADPCM(MSM6258) 샘플을 쓴다. 샘플은 따로 `.PDX` 파일에 들어 있다.

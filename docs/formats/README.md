@@ -4,6 +4,7 @@
 > **프로젝트**: [JMPlayer](https://github.com/jihodaya/jmplayer) — 옛 컴퓨터 음악 재생기
 > **최초 정리**: 2026-09-28
 > **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko)
+> **언어**: 한국어 원문 · [English translation](en/README.md)
 
 이 폴더는 JMPlayer를 만들면서 알아낸 옛 음악 파일 포맷의 구조를 기록한 것이다.
 대부분 공식 문서가 남아 있지 않은 포맷이고, 원본 프로그램을 디컴파일하거나

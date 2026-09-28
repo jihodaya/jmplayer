@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: 라이브러리 `.NOB` 실측 — 가사 위치와 노래 채널 음표 시점의 회귀 분석 (2026-07-31).
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/nob.md)
 
 옥소리 노래방 4.0 이전 버전의 곡 파일이다. 짧은 머리 뒤에 **평문 표준 MIDI
 파일**이 있고, 그 뒤에 가사가 붙어 있다.

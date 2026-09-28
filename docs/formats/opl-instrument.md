@@ -3,7 +3,7 @@
 > **작성**: JJOME (GitHub [jihodaya](https://github.com/jihodaya)) — [JMPlayer](https://github.com/jihodaya/jmplayer) 포맷 분석 기록
 > **최초 정리**: 2026-09-28 · **라이선스**: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ko) — 인용 시 작성자와 출처를 밝혀 주세요.
 > **근거**: GAYOBANG.EXE · NORE45.EXE 디컴파일, 라이브러리 `.GYB`/`.OKA` 169곡(악기 레코드 772개) 실측, 실기 녹음 비교.
-> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고)
+> 표시: ✅ 확인됨 · 📏 실측으로 맞춤 · ❓ 미확인 ([README](README.md) 참고) · [English](en/opl-instrument.md)
 
 가요방 `.GYB`와 옥소리 `.OKA`는 **같은 38바이트 악기 레코드**를 쓴다. 곡 파일이
 자기 악기를 직접 들고 다니고, 원본 프로그램은 그것을 그대로 연주한다.
@@ -118,8 +118,8 @@ GAYOBANG `FUN_28a1_0155`는 뱅크의 12바이트 이름 항목을 이진 검색
 
 (각 줄: 모듈레이터 13바이트, 캐리어 13바이트, 파형 2바이트)
 
-✅ 이 표 앞의 5개 슬롯은 OPL 범위를 벗어난 값이라 표의 일부가 아니다. 표는 딱
-6개다.
+✅ 표는 딱 6개다. `0x120a` 바로 앞의 같은 크기 다섯 칸을 악기로 읽어 보면 OPL
+값의 범위를 벗어나므로, 표가 앞쪽으로 더 이어지는 것이 아니다.
 
 ### 뱅크에도 없는 빈 레코드 — 원본 코드와 다르게 처리하는 유일한 곳
 

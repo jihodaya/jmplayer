@@ -25,10 +25,10 @@ for where to put your own.
 
 📖 **User manual:** [English](docs/MANUAL.en.md) · [한국어](docs/MANUAL.ko.md)
 
-🔍 **Format notes:** [`docs/formats/`](docs/formats/README.md) — what was worked out
-about each file format (GYB, OKA/OKM/OKW, NOB, ISS, RCP, Ballade SNG, MDX, MLD MDZ),
-mostly by decompiling the original programs and checking against their own output.
-Written in Korean, under CC BY 4.0.
+🔍 **Format notes:** [English](docs/formats/en/README.md) · [한국어](docs/formats/README.md) —
+what was worked out about each file format (GYB, OKA/OKM/OKW, NOB, ISS, RCP, Ballade SNG,
+MDX, MLD MDZ), mostly by decompiling the original programs and checking against their
+own output. Under CC BY 4.0.
 
 ## 🎵 Supported formats
 
@@ -121,7 +121,7 @@ MT-32 롬과 Nuked-SC55 에뮬레이터는 **포함되어 있지 않습니다**.
 
 📖 **사용자 매뉴얼:** [한국어](docs/MANUAL.ko.md) · [English](docs/MANUAL.en.md)
 
-🔍 **포맷 분석 기록:** [`docs/formats/`](docs/formats/README.md) — 각 파일 포맷(GYB,
+🔍 **포맷 분석 기록:** [한국어](docs/formats/README.md) · [English](docs/formats/en/README.md) — 각 파일 포맷(GYB,
 OKA/OKM/OKW, NOB, ISS, RCP, Ballade SNG, MDX, MLD MDZ)에 대해 알아낸 것을 정리했습니다.
 대부분 원본 프로그램을 디컴파일하고 원본이 만든 결과와 대조해서 알아낸 내용입니다.
 CC BY 4.0으로 공개합니다.
