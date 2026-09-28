@@ -11,13 +11,15 @@ https://www.youtube.com/@jjome_Plus
 
 ### 🌟 Features
 
-*   **Format Support:** Playback and parsing of Korean retro formats (`.SOP`, `.GYB`, `.NOB`, `.OKM` / `.OKA`, `.IMS` / `.ISS`), standard AdLib `.ROL` files, and VGM/VGZ chiptunes.
+*   **Format Support:** Playback and parsing of Korean retro formats (`.SOP`, `.GYB`, `.NOB`, `.OKM` / `.OKA` / `.OKW`, `.IMS` / `.ISS`), standard AdLib `.ROL` files, and VGM/VGZ chiptunes.
+*   **Japanese computer formats (V3.1):** Recomposer `.RCP` (with its `.GSD` setup) and Ballade `.SNG` from the PC-98; Sharp X68000 `.MDX` (YM2151 + ADPCM, with `.PDX` sample banks) and MLD `.MDZ`, whose FM/PCM and MIDI parts play together.
+*   **More VGM chips (V3.1):** YM2612, YM2151, SN76489, Game Boy, YM2413, AY-3-8910, SegaPCM, YM2610 and QSound.
 *   **Visualizer:** 
     *   16-channel volume VU meters and attack peak visualization.
     *   Piano Roll window showing active note layouts.
     *   Dynamic instrument name cards displaying active FM patches.
 *   **Lyrics Display:** Basic lyrics support with syllable-level highlighting and text decoding (Johab/EUC-KR).
-*   **Audio Engine:** Software OPL3 synthesis via AdPlug and SoundFont (.sf2) playback powered by TinySoundFont.
+*   **Audio Engine:** Software OPL3 synthesis via AdPlug and SoundFont (.sf2) playback powered by TinySoundFont; a built-in MT-32 / CM-32L through munt (ROMs not included); Nuked-OPM for the X68000.
 *   **Nuked-SC55 (optional):** Play through the Nuked-SC55 emulator with no virtual MIDI cable (no loopMIDI). A stock build stays silent — build it with the patch in [`emulator-patch/`](emulator-patch/). The emulator is not shipped with JMPlayer.
 
 ### 🛠️ Quick Build Guide
@@ -37,7 +39,7 @@ cd JMPlayer
 ### 📄 License & Credits
 
 *   **Project Code:** Released under the **MIT License** (see [`LICENSE`](LICENSE)). Free to use, modify, distribute and sell; just keep the copyright notice.
-*   **Third-party Dependencies:** Dynamically linked to **Qt 6 (LGPL v3)** and **AdPlug (LGPL v2.1)** to comply with LGPL requirements.
+*   **Third-party Dependencies:** Dynamically linked to **Qt 6 (LGPL v3)** and **AdPlug (LGPL v2.1)** to comply with LGPL requirements. The emulation cores built in (Nuked-OPM, Nuked-OPN2, emu2413, emu2149, ymfm, qsound-hle, munt) are listed with their licences in [`LICENSE.md`](LICENSE.md).
 *   **Credits:** Thanks to **BK (병코돌고래)** for providing the sample song collection (`BK/` folder).
 *   **Nuked-SC55:** A separate program, not part of JMPlayer — by [nukeykt](https://github.com/nukeykt/Nuked-SC55) with the [GUI fork](https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float) by linoshkmalayil, under the MAME License (non-commercial). Only JMPlayer's own patch is included here.
 
@@ -63,13 +65,15 @@ Neither is required to use JMPlayer on its own.
 
 ### 🌟 주요 기능
 
-*   **포맷 재생 지원:** 국산 고전 포맷 파일(`.SOP`, `.GYB`, `.NOB`, `.OKM` / `.OKA`, `.IMS` / `.ISS`) 및 표준 애드립 파일(`.ROL`), VGM/VGZ 칩튠 파일 재생.
+*   **포맷 재생 지원:** 국산 고전 포맷 파일(`.SOP`, `.GYB`, `.NOB`, `.OKM` / `.OKA` / `.OKW`, `.IMS` / `.ISS`) 및 표준 애드립 파일(`.ROL`), VGM/VGZ 칩튠 파일 재생.
+*   **일본 컴퓨터 포맷 (V3.1):** PC-98의 레코포자 `.RCP`(`.GSD` 셋업 포함)와 발라드 `.SNG`, 샤프 X68000의 `.MDX`(YM2151 + ADPCM, `.PDX` 샘플 뱅크)와 MLD `.MDZ`(FM/PCM과 MIDI 파트 동시 재생).
+*   **VGM 칩 확장 (V3.1):** YM2612, YM2151, SN76489, 게임보이, YM2413, AY-3-8910, SegaPCM, YM2610, QSound.
 *   **시각화 (Visualizer):**
     *   16채널 볼륨 VU 레벨 모니터 및 어택 Peak 표시.
     *   음표 연주 상태를 보여주는 피아노 롤(Piano Roll) 창.
     *   활성화된 FM 패치 정보를 보여주는 악기 이름 카드.
 *   **가사 표시:** 조합형(Johab) 및 완결형(EUC-KR) 가사 텍스트의 음절 단위 하이라이팅 표시.
-*   **오디오 엔진:** AdPlug 기반의 소프트웨어 OPL3 에뮬레이션 및 TinySoundFont 기반의 사운드폰트(.sf2) 재생.
+*   **오디오 엔진:** AdPlug 기반의 소프트웨어 OPL3 에뮬레이션 및 TinySoundFont 기반의 사운드폰트(.sf2) 재생, munt 기반 내장 MT-32 / CM-32L(롬 미포함), X68000용 Nuked-OPM.
 *   **Nuked-SC55 (선택):** 가상 MIDI 케이블(loopMIDI) 없이 Nuked-SC55 에뮬레이터로 재생. 원본 빌드는 소리가 나지 않으며, [`emulator-patch/`](emulator-patch/)의 패치로 직접 빌드해야 합니다. 에뮬레이터는 함께 배포되지 않습니다.
 
 ### 🛠️ 빠른 빌드 방법
@@ -89,7 +93,7 @@ cd JMPlayer
 ### 📄 라이선스 및 제공자 정보
 
 *   **프로젝트 소스 코드:** **MIT 라이선스**로 배포됩니다([`LICENSE`](LICENSE) 참고). 저작권 고지만 유지하면 자유롭게 사용·수정·배포·판매하실 수 있습니다.
-*   **외부 라이브러리:** LGPL 라이선스 준수를 위해 **Qt 6 (LGPL v3)** 및 **AdPlug (LGPL v2.1)** 라이브러리와 동적 링크(DLL) 방식으로 빌드됩니다.
+*   **외부 라이브러리:** LGPL 라이선스 준수를 위해 **Qt 6 (LGPL v3)** 및 **AdPlug (LGPL v2.1)** 라이브러리와 동적 링크(DLL) 방식으로 빌드됩니다. 내장된 에뮬레이션 코어(Nuked-OPM, Nuked-OPN2, emu2413, emu2149, ymfm, qsound-hle, munt)의 라이선스는 [`LICENSE.md`](LICENSE.md)에 정리되어 있습니다.
 *   **제공자 기여:** 음원 테스트를 위해 샘플 연주곡 세트(`BK/` 폴더)를 제공해 주신 **BK (병코돌고래)** 님께 감사드립니다.
 *   **Nuked-SC55:** JMPlayer의 일부가 아닌 별개의 프로그램입니다 — [nukeykt](https://github.com/nukeykt/Nuked-SC55) 원작, [GUI 포크](https://github.com/linoshkmalayil/Nuked-SC55-GUI-Float)는 linoshkmalayil, MAME 라이선스(비상업). 여기에는 JMPlayer의 패치만 포함됩니다.
 

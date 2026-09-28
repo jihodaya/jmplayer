@@ -34,6 +34,8 @@ class ChannelMonitor;
 class LyricsWindow;
 class PianoRollWindow;
 class OkaPlayer;
+class MdxPlayer;
+class VgmPlayer;
 class PlaylistModel;
 
 // Playlist tree structure
@@ -91,6 +93,8 @@ private slots:
     void nextTrack();
     void rewind();
     void fastForward();
+    void setupMldFmHalf(const QString& filePath);
+    void onFmBalanceChanged(int value);
     void onVolumeChanged(int value);
     void onPositionChanged(int value);
     void onFileSelected();
@@ -118,6 +122,8 @@ private slots:
     bool isOplFile(const QString& filePath) const;
     bool isGybFile(const QString& filePath) const;
     bool isOkaFile(const QString& filePath) const;
+    bool isMdxFile(const QString& filePath) const;
+    bool isVgmFile(const QString& filePath) const;
     bool isOkaOplFile(const QString& filePath) const;
     // True when this .GYB/.OKA is set to play through a MIDI module rather than
     // the OPL engine. GAYOBANG and NORE45 both offered this; see gybokamidi.h.
@@ -231,6 +237,13 @@ protected:
     QHBoxLayout *volumeLayout;
     QLabel *volumeLabel;
     QSlider *volumeSlider;
+    // Shown only while a song with both halves is loaded - twelve of the 158
+    // MLD files here - because for every other song it controls nothing.
+    QLabel *fmBalanceLabel;
+    QSlider *fmBalanceSlider;
+    QLabel *fmBalanceValue = nullptr;    // "기본" / "FM 40%" / "MIDI 40%"
+    QHBoxLayout *balanceLayout = nullptr;
+    class MldFmPlayer *mldFmPlayer = nullptr;
     QLabel *volumeValue;
 
     // Progress control
@@ -255,6 +268,8 @@ protected:
     class ImsPlayer *imsPlayer;
     class GybPlayer *gybPlayer;
     class OkaPlayer *okaPlayer;
+    class MdxPlayer *mdxPlayer;
+    class VgmPlayer *vgmPlayer;
 
     // Timer for position updates
     QTimer *positionTimer;

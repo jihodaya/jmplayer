@@ -1,6 +1,10 @@
 #include "midiplayer.h"
+#include "mdxmidi.h"
 #include "gybokamidi.h"
 #include "nobfilehandler.h"
+#include "rcpfilehandler.h"
+#include "sngmidi.h"
+#include "uistrings.h"
 #include "okafilehandler.h"
 #include "opltunnelsender.h" // to stay off the wire while the OPL tunnel owns it
 #include "settingsmanager.h"
@@ -361,8 +365,7 @@ void MidiPlayer::disconnect(bool async)
 
 bool MidiPlayer::isConnected() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
-    return connected;
+    return connected;   // atomic; no lock - see isPlaying()
 }
 
 void MidiPlayer::sendLiveProgramChange(int channel, int bankMsb, int program)
@@ -378,6 +381,10 @@ bool MidiPlayer::loadMidiFile(const QString &filename)
 {
     // Stop playback before modifying tracks to prevent background thread crash
     stop();
+
+    // A GS file can move the drums off channel 10, and that state must not
+    // outlive the song that asked for it.
+    JJoMeSynth::instance().resetDrumChannels();
     
     QString actualFilename = filename;
     QString tempMidiPath;
@@ -388,6 +395,49 @@ bool MidiPlayer::loadMidiFile(const QString &filename)
     // on exactly like a .NOB. .OKM and .OKW are not included: they already play
     // as MIDI, and routing them through the GM remap would change how songs
     // that have always worked sound.
+    // A .MDX/.mdz that routes its parts to an external module arrives here
+    // rather than at MdxPlayer (see MainWindow::isMdxFile). Capture what those
+    // parts play and hand it on as an ordinary SMF - the same shape as the RCP
+    // and .GYB-through-MIDI paths.
+    {
+        const QString mdxSuffix = QFileInfo(filename).suffix().toLower();
+        if (mdxSuffix == "mdx" || mdxSuffix == "mdz") {
+            // The sequence is decoded by mdxmidi.cpp, which is a port of a
+            // working player rather than a solved format - see the comments
+            // there. It plays, and it is close enough to be worth hearing;
+            // several of its rules are still guesses.
+            const QByteArray midiData = mdxmidi::toMidi(filename);
+            if (midiData.isEmpty()) {
+                emit errorOccurred(LSTR(
+                    "이 MDX의 MIDI 파트를 읽지 못했습니다.",
+                    "The MIDI parts of this MDX could not be read."));
+                m_reportedError = true;
+                return false;
+            }
+            QString tempDir = QCoreApplication::applicationDirPath() + "/temp";
+            QDir().mkpath(tempDir);
+            QTemporaryFile *tempFile = new QTemporaryFile(tempDir + "/mdx_XXXXXX.mid", this);
+            if (!tempFile->open()) {
+                emit errorOccurred("Failed to create temporary MIDI file");
+                delete tempFile;
+                return false;
+            }
+            tempFile->write(midiData);
+            tempFile->flush();
+            tempMidiPath = tempFile->fileName();
+            actualFilename = tempMidiPath;
+            if (currentTempFile) delete currentTempFile;
+            currentTempFile = tempFile;
+            qDebug() << "[MidiPlayer] built" << midiData.size()
+                     << "bytes of MIDI from" << filename;
+        }
+    }
+
+    const QString rcpSuffix = QFileInfo(filename).suffix().toLower();
+    const bool rcpExt = (rcpSuffix == "rcp" || rcpSuffix == "r36" ||
+                         rcpSuffix == "g36" || rcpSuffix == "g18" ||
+                         rcpSuffix == "sng");
+
     if (gybokamidi::isSupported(filename)) {
         QString err;
         QByteArray midiData = gybokamidi::toMidi(
@@ -402,6 +452,58 @@ bool MidiPlayer::loadMidiFile(const QString &filename)
         QString tempDir = QCoreApplication::applicationDirPath() + "/temp";
         QDir().mkpath(tempDir);
         QTemporaryFile *tempFile = new QTemporaryFile(tempDir + "/opl_XXXXXX.mid", this);
+        if (!tempFile->open()) {
+            emit errorOccurred("Failed to create temporary MIDI file");
+            delete tempFile;
+            return false;
+        }
+        tempFile->write(midiData);
+        tempFile->flush();
+        tempMidiPath = tempFile->fileName();
+        actualFilename = tempMidiPath;
+        if (currentTempFile) delete currentTempFile;
+        currentTempFile = tempFile;
+        qDebug() << "[MidiPlayer] built" << midiData.size() << "bytes of MIDI from" << filename;
+    }
+    // Roland Recomposer (.RCP / .R36 / .G36 / .G18 / .SNG). Like .NOB it is a
+    // container: the sequence is converted to a Standard MIDI File and handed
+    // to the ordinary MIDI path, so every output device works with it - the
+    // SoundFont, a real port, Nuked-SC55 and the built-in MT-32 alike. That
+    // last one matters here: Recomposer data was written for an MT-32 / CM-64
+    // or an SC-55, which is exactly what jmp now emulates.
+    // Dispatched on the extension, like every other format here - but the
+    // converter checks the signature itself and refuses anything that is not
+    // Recomposer, which is what stops a Ballade .SNG being read as one.
+    else if (rcpExt) {
+        // .sng is shared between Recomposer and Ballade, so the file decides.
+        // Ballade used to end here as "not supported yet"; it is read now.
+        const bool ballade = sngmidi::isSngFile(filename);
+        if (ballade) qDebug() << "Ballade SNG detected:" << filename;
+        else         qDebug() << "RCP file detected:" << filename;
+
+        QByteArray midiData = ballade ? sngmidi::toMidi(filename)
+                                      : RcpFileHandler::extractMidiData(filename);
+        if (midiData.isEmpty()) {
+            qWarning() << "Failed to convert RCP file:" << filename;
+            // A .SNG that is not Recomposer is the common case here, and saying
+            // so is more use than "conversion failed".
+            QFile probe(filename);
+            QByteArray head;
+            if (probe.open(QIODevice::ReadOnly)) { head = probe.read(32); probe.close(); }
+            if (head.contains("BALLADE")) {
+                emit errorOccurred(LSTR("Ballade 파일을 읽을 수 없습니다 (블록 표가 파일과 맞지 않음).",
+                                        "This Ballade file could not be read - its block table does not match the file."));
+            } else {
+                emit errorOccurred(LSTR("Recomposer 파일로 읽을 수 없습니다.",
+                                        "This is not a Recomposer file."));
+            }
+            m_reportedError = true;
+            return false;
+        }
+
+        QString tempDir = QCoreApplication::applicationDirPath() + "/temp";
+        QDir().mkpath(tempDir);
+        QTemporaryFile *tempFile = new QTemporaryFile(tempDir + "/rcp_XXXXXX.mid", this);
         if (!tempFile->open()) {
             emit errorOccurred("Failed to create temporary MIDI file");
             delete tempFile;
@@ -550,6 +652,13 @@ void MidiPlayer::play()
 
         // Reset channel state including mute settings
         initializeChannelState();
+        // A new song has given the module nothing yet. This lives here and NOT
+        // in initializeChannelState(), which the seek itself calls - putting it
+        // there would make every seek believe the setup had never gone out and
+        // re-send all of it, which is the whole problem this avoids.
+        m_sysExSentThroughTick = 0;
+        m_sysExBurstBytes = 0;
+        m_startupSysExDone = false;
 
         // Reset channel volumes to default at start
         for (int channel = 0; channel < 16; channel++) {
@@ -613,7 +722,9 @@ void MidiPlayer::stop()
 
 bool MidiPlayer::isPlaying() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
+    // No lock: `playing` is atomic. See the note on those members - the GUI
+    // polls this every tick and processEvents() can hold stateMutex for
+    // seconds while a large SysEx upload goes out over a MIDI wire.
     return playing;
 }
 
@@ -643,7 +754,8 @@ QString MidiPlayer::getCurrentFile() const
 
 unsigned long MidiPlayer::getCurrentPosition() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
+    // No lock - see isPlaying(). QElapsedTimer::elapsed() only reads the
+    // monotonic clock, so it is safe to call from here.
     if (!playing && !paused) return 0;
 
     unsigned long currentTime;
@@ -663,8 +775,7 @@ unsigned long MidiPlayer::getTotalDuration() const
 
 unsigned long MidiPlayer::getCurrentTick() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
-    return currentTick;
+    return currentTick;   // atomic; no lock - see isPlaying()
 }
 
 unsigned long MidiPlayer::getTotalTicks() const
@@ -920,6 +1031,29 @@ QString MidiPlayer::decodeMetaText(const QByteArray& raw)
         return false;
     };
 
+    // Japanese first, but only on evidence that cannot be a coincidence.
+    //
+    // Trying Korean first and accepting it the moment a Hangul syllable appears
+    // is wrong for a title like BAMBOO.MID's, which is Shift-JIS fullwidth Latin
+    // - 82 61 82 81 82 8D is Ｂａｍ - and decodes as perfectly valid CP949
+    // Hangul. It came out as a string of unrelated Korean syllables.
+    //
+    // Hiragana and fullwidth Latin are the tell. Both sit in narrow ranges that
+    // Korean text does not land on by accident, where katakana and kanji do
+    // collide with CP949's hanja. So those two decide it and nothing else does;
+    // everything that is not clearly Japanese still goes to Korean first.
+    {
+        const QString s = tryCodepage(932, MB_ERR_INVALID_CHARS);
+        for (const QChar& c : s) {
+            const ushort u = c.unicode();
+            const bool hiragana = (u >= 0x3041 && u <= 0x3096);
+            const bool fullwidth = (u >= 0xFF10 && u <= 0xFF19)
+                                || (u >= 0xFF21 && u <= 0xFF3A)
+                                || (u >= 0xFF41 && u <= 0xFF5A);
+            if (hiragana || fullwidth) return s;
+        }
+    }
+
     // Korean, then Japanese, each required to decode cleanly AND to yield
     // characters of that language.
     {
@@ -1094,6 +1228,9 @@ void MidiPlayer::processEvents()
         currentTempo = tc.tempo;
     }
 
+    // Once we are past tick 0, the opening SysEx have been delivered.
+    if (currentTick > 0) m_startupSysExDone = true;
+
     bool anyTrackActive = false;
 
     // Process events in each track
@@ -1104,9 +1241,92 @@ void MidiPlayer::processEvents()
 
             // Check if it's time to play this event
             if (eventTick <= currentTick) {
+                if (event.isSysExEvent && m_startupSysExDone && eventTick == 0) {
+                    // Already given to the module, and it still has it.
+                    //
+                    // Seeking to position 0 resets every track's event index to
+                    // 0 (so the notes on tick 0 play again), which also puts the
+                    // song's opening SysEx back in front of us. For an MT-32 set
+                    // like Prince of Persia that is **20,154 bytes** - six and a
+                    // half seconds of cable, nine at the default pacing - spent
+                    // re-uploading timbres the module is already holding. It
+                    // reads as jmp freezing, and only ever at the start, which
+                    // is exactly how it was reported.
+                    //
+                    // Once the song has played past tick 0 there is nothing a
+                    // tick-0 SysEx can tell the module that it was not told the
+                    // first time. play() clears the flag, so stopping and
+                    // starting the song still sets the module up.
+                    track.currentEventIndex++;
+                    continue;
+                }
                 if (event.isSysExEvent) {
+                    // Wire time is not musical time.
+                    //
+                    // sendSysExMessage() BLOCKS until the driver has actually
+                    // transmitted, and `currentTick` above is derived from the
+                    // wall clock - so every millisecond spent pushing bytes
+                    // down a 31250-baud link is charged against the song.
+                    //
+                    // The Prince of Persia MT-32 set is the case that showed
+                    // it: all 93 of its SysEx sit at tick 0, together with the
+                    // first note, and they total 20,154 bytes = **6.45 s** of
+                    // wire time. Without this, the clock ran through the whole
+                    // upload and the first six seconds of music were then all
+                    // overdue and fired at once - silence, then the intro
+                    // dumped out instantly. Reported as "it lags about 5
+                    // seconds then suddenly plays", and only on an external
+                    // device: munt and the internal synth take a function call,
+                    // not a wire, so they cannot show it.
+                    //
+                    // Pushing the origin out by what the send consumed cannot
+                    // rush anything - it can only make the music start later,
+                    // which is what a real MT-32 does too while it swallows a
+                    // timbre upload.
+                    const qint64 sysExStartMs = m_elapsedTimer.elapsed();
                     sendSysExMessage(event.sysExData);
+                    const qint64 sysExSpentMs = m_elapsedTimer.elapsed() - sysExStartMs;
+                    if (sysExSpentMs > 0)
+                        playbackStartTime += sysExSpentMs;
+                    if (eventTick > m_sysExSentThroughTick)
+                        m_sysExSentThroughTick = eventTick;
+                    m_sysExBurstBytes += static_cast<qint64>(event.sysExData.size()) + 1;
+                    // Say what the wait is, once it is long enough to look like
+                    // a hang. 1 KB is a third of a second of cable; below that
+                    // nobody notices and the message would only flicker. Across
+                    // a 2,980-song sample of the library **97.7% of files never
+                    // reach it** - most send no SysEx before their first note at
+                    // all - so this cannot become noise on ordinary MIDI.
+                    if (m_sysExBurstBytes > 1024) {
+                        if (!m_sysExTransferAnnounced) m_sysExTransferAnnounced = true;
+                        emit sysExTransfer(true, static_cast<int>(m_sysExBurstBytes / 1024));
+                    }
                 } else if (!event.isMetaEvent) {
+                    // Let the module ACT on a bulk dump before playing over it.
+                    //
+                    // Pacing the bytes at cable speed stops the far end being
+                    // flooded, but receiving is not the same as applying: an
+                    // MT-32 handed a 20 KB timbre upload is still busy when the
+                    // notes arrive, and the opening comes out clipped. This is
+                    // the same idea as MidiReset's settle delay (50 ms), scaled
+                    // to how much was actually sent.
+                    //
+                    // **The number is fitted to the symptom, not derived** -
+                    // there is no way to ask the module how long it needs. The
+                    // Prince of Persia set puts 20,154 bytes on tick 0, which
+                    // lands on ~630 ms here. Small bursts (a GM reset, a GS
+                    // macro) fall under the threshold and cost nothing.
+                    if (m_sysExBurstBytes > 512) {
+                        const qint64 settleMs = qMin<qint64>(800, m_sysExBurstBytes / 32);
+                        QThread::msleep(static_cast<unsigned long>(settleMs));
+                        playbackStartTime += settleMs;   // not musical time
+                    }
+                    if (m_sysExTransferAnnounced) {
+                        m_sysExTransferAnnounced = false;
+                        emit sysExTransfer(false, 0);
+                    }
+                    m_sysExBurstBytes = 0;
+
                     unsigned char status = event.status;
                     unsigned char data1 = event.data1;
                     unsigned char data2 = event.data2;
@@ -1496,9 +1716,54 @@ void MidiPlayer::sendMidiMessage(DWORD message)
     midiOutShortMsg(hMidiOut, message);
 }
 
+// GS says which part is rhythm, and the internal SoundFont engine has to be
+// told because TinySoundFont has no idea what GS is - it assumed channel 10 and
+// nothing else. A file that moves its drums (BAMBOO.RCP puts them on channel 2
+// and leaves 10 melodic) played its whole drum track as a pitched instrument.
+//
+// Two forms are handled. `40 1n 15 vv` sets one part: n is the GS part slot,
+// where slot 0 is channel 10 and slots 1..9 are channels 1..9, and vv is 0 for
+// melodic or 1/2 for a drum map. A GM/GS/XG reset puts it back to GM's answer.
+void MidiPlayer::applyGsRhythmSysEx(const std::vector<unsigned char> &data)
+{
+    if (!m_useInternalSynth) return;
+
+    // Reset messages: GM1 `7E 7F 09 01`, GS `41 .. 42 12 40 00 7F 00`,
+    // XG `43 .. 4C 00 00 7E 00`.
+    const bool gmReset = (data.size() >= 4 && data[0] == 0x7E &&
+                          data[2] == 0x09);
+    const bool gsReset = (data.size() >= 8 && data[0] == 0x41 &&
+                          data[2] == 0x42 && data[3] == 0x12 &&
+                          data[4] == 0x40 && data[5] == 0x00 && data[6] == 0x7F);
+    const bool xgReset = (data.size() >= 7 && data[0] == 0x43 &&
+                          data[2] == 0x4C && data[4] == 0x00 && data[5] == 0x7E);
+    if (gmReset || gsReset || xgReset) {
+        JJoMeSynth::instance().resetDrumChannels();
+        return;
+    }
+
+    // Roland GS part parameter: 41 <dev> 42 12 40 1n 15 vv
+    if (data.size() < 8) return;
+    if (data[0] != 0x41 || data[2] != 0x42 || data[3] != 0x12) return;
+    if ((data[4] & 0xF0) != 0x40 || (data[5] & 0xF0) != 0x10) return;
+    if (data[6] != 0x15) return;
+
+    const int slot = data[5] & 0x0F;
+    const int channel = (slot == 0) ? 9 : (slot < 10 ? slot - 1 : slot);
+    if (channel > 15) return;
+
+    JJoMeSynth::instance().setDrumChannel(channel, data[7] != 0);
+    qDebug() << "[GS] part" << slot << "-> MIDI channel" << (channel + 1)
+             << (data[7] ? "= rhythm" : "= melodic");
+}
+
 void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
 {
     if (!connected || data.empty()) return;
+
+    // Do this before the device branches: the internal synth never gets past
+    // them, and this is the one thing it does need out of a SysEx stream.
+    applyGsRhythmSysEx(data);
 
     // Build the complete framed message FIRST, before any device branch.
     //
@@ -1551,6 +1816,8 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
     midiHeader.dwFlags = 0;
 
     // Prepare and send the message
+    const qint64 sysExSendStartMs = m_elapsedTimer.elapsed();
+
     MMRESULT result = midiOutPrepareHeader(hMidiOut, &midiHeader, sizeof(MIDIHDR));
     if (result == MMSYSERR_NOERROR) {
         ResetEvent(m_sysExEvent);
@@ -1571,6 +1838,37 @@ void MidiPlayer::sendSysExMessage(const std::vector<unsigned char> &data)
             Sleep(50);
         }
     }
+
+    // Hand the message over no faster than a MIDI cable could carry it.
+    //
+    // A USB-MIDI port accepts a burst as fast as the driver can copy it, and
+    // whatever is on the far end then has to absorb the lot. The RP2040
+    // CircuitPython bridge this project uses to reach mt32-pi queues into
+    // **8 KB** and drains 16 bytes per pass; the Prince of Persia MT-32 set
+    // hands it **20,154 bytes at tick 0** (93 messages, 72 of them 256 bytes).
+    // Past 8 KB its `push()` falls back to writing single bytes synchronously
+    // to make room, which stalls the loop that is reading USB - reported as the
+    // music stuttering and its opening being cut off.
+    //
+    // MIDI carries 3,125 bytes a second, so a 256-byte dump is 82 ms of cable.
+    // Sleeping out whatever the driver did not already spend costs nothing on a
+    // real port (it blocks for the wire time anyway) and paces the burst for a
+    // fast one. The clock is compensated by the caller, so the music does not
+    // rush to catch up - it simply starts as late as the hardware requires.
+    // `Midi/SysExPacePct` stretches this beyond cable speed. It exists because
+    // the far end can be slower than the cable: the RP2040 CircuitPython bridge
+    // drains its queue 16 bytes at a time from Python, and if that cannot keep
+    // up with 3,125 bytes a second a long burst leaves a BACKLOG in its 8 KB
+    // queue. The music still sounds right - it is simply queued behind - but the
+    // next thing sent waits for the backlog to drain, which is why seeking
+    // during Prince of Persia paused for 1-5 s **the first time only** and was
+    // instant afterwards. Raising this above 100 trades a later start for a
+    // queue that never builds.
+    const qint64 wireMs =
+        static_cast<qint64>(sysExMessage.size()) * 1000 * m_sysExPacePct / (3125 * 100);
+    const qint64 spentMs = m_elapsedTimer.elapsed() - sysExSendStartMs;
+    if (wireMs > spentMs)
+        QThread::msleep(static_cast<unsigned long>(wireMs - spentMs));
 }
 
 void MidiPlayer::updateVolumeToDevice()
@@ -1700,9 +1998,31 @@ void MidiPlayer::performSeek()
     } else if (paused) {
         pausedTime = pendingSeekPosition;
     }
+    emit seeked(pendingSeekPosition);
 
     // Clear seek pending flag
     setProperty("seekPending", false);
+}
+
+// A device reset is a momentary command, not state - the same reasoning that
+// keeps CC120-127 out of the controller replay.
+//
+// Replaying one is worse than useless: a GS reset puts every part back to
+// program 0, which is a piano, and a real module needs tens of milliseconds to
+// come back - so everything the chase sends immediately after it is dropped and
+// the whole song plays on pianos. Reported as "seek and the alto sax turns into
+// a piano", and invisible on the internal SoundFont, which never sees SysEx at
+// all (applyGsRhythmSysEx takes the drum-part message out and the rest stops
+// there). The song's own setup - part parameters, reverb and chorus macros - is
+// still replayed; only the reset in front of it is skipped.
+static bool isResetSysEx(const std::vector<unsigned char>& d)
+{
+    const bool gm = d.size() >= 4 && d[0] == 0x7E && d[2] == 0x09;
+    const bool gs = d.size() >= 8 && d[0] == 0x41 && d[2] == 0x42 && d[3] == 0x12 &&
+                    d[4] == 0x40 && d[5] == 0x00 && d[6] == 0x7F;
+    const bool xg = d.size() >= 7 && d[0] == 0x43 && d[2] == 0x4C &&
+                    d[4] == 0x00 && d[5] == 0x7E;
+    return gm || gs || xg;
 }
 
 void MidiPlayer::performSeekImmediate(unsigned long position)
@@ -1746,6 +2066,8 @@ void MidiPlayer::performSeekImmediate(unsigned long position)
     // Reset channel state to defaults
     initializeChannelState();
 
+    std::vector<std::vector<unsigned char>> pendingSysEx;
+
     // Position tracks to target tick and build correct MIDI state
     for (auto& track : tracks) {
         track.currentEventIndex = 0;
@@ -1756,6 +2078,24 @@ void MidiPlayer::performSeekImmediate(unsigned long position)
             unsigned long eventTick = (unsigned long)event.absoluteTimeUs; // Using as tick storage
 
             if (eventTick <= targetTick) {
+                // The song's own module setup is SysEx - for a Recomposer file
+                // that is the whole control-file dump, reverb and chorus and
+                // every part's block - so seeking past it before it has been
+                // sent would throw all of it away.
+                //
+                // Only the ones the module has NOT already been given, though.
+                // Replaying the lot on every seek means about seven kilobytes
+                // at once for a song with a .GSD - 32 part dumps and 16 drum
+                // maps - and MIDI carries 3,125 bytes a second, so that is over
+                // two seconds of wire time delivered instantly. A real module,
+                // or Nuked-SC55 at the end of the pipe, cannot take it and the
+                // sound comes apart. Seeking inside a song that is already
+                // playing needs none of it: the module still holds what it was
+                // given at the start.
+                if (event.isSysExEvent && !isResetSysEx(event.sysExData) &&
+                    eventTick > m_sysExSentThroughTick) {
+                    pendingSysEx.push_back(event.sysExData);
+                }
                 // Track state-changing events (but don't send yet)
                 if (!event.isMetaEvent && !event.isSysExEvent) {
                     unsigned char status = event.status;
@@ -1779,6 +2119,15 @@ void MidiPlayer::performSeekImmediate(unsigned long position)
         }
     }
 
+    // The setup first, then the controllers on top of it - that is the order
+    // the song itself used, and a GS reset arriving after the bank selects
+    // would undo them.
+    for (const auto& blob : pendingSysEx) {
+        sendSysExMessage(blob);
+    }
+    if (targetTick > m_sysExSentThroughTick)
+        m_sysExSentThroughTick = targetTick;
+
     // Send the final state to restore correct instruments and settings
     sendCurrentChannelState();
 
@@ -1796,6 +2145,7 @@ void MidiPlayer::performSeekImmediate(unsigned long position)
     } else if (paused) {
         pausedTime = position;
     }
+    emit seeked(position);
 }
 
 void MidiPlayer::initializeChannelState()
@@ -1809,6 +2159,11 @@ void MidiPlayer::initializeChannelState()
         currentChannelState[i].sustain = 0;
         // NOB 파일일 때만 채널 11 (index 10)을 음소거
         currentChannelState[i].muted = (isNobFile && i == 10);
+        memset(m_ccState[i], 0xFF, sizeof(m_ccState[i]));   // 0xFF = untouched
+        m_lastNrpn[i] = -1;
+        m_lastRpn[i] = -1;
+        m_nrpnValues[i].clear();
+        m_rpnValues[i].clear();
     }
 
     for (int ch = 0; ch < 16; ch++) {
@@ -1827,11 +2182,43 @@ void MidiPlayer::updateChannelState(unsigned char status, unsigned char data1, u
     if ((status & 0xF0) == 0xB0) {
         // Control Change
         int channel = status & 0x0F;
+        if (data1 < 128) m_ccState[channel][data1] = data2;
         switch (data1) {
             case 1:  currentChannelState[channel].modWheel = data2; break;
             case 7:  currentChannelState[channel].volume = data2; break;
             case 11: currentChannelState[channel].expression = data2; break;
             case 64: currentChannelState[channel].sustain = data2; break;
+            // Remember which parameter the next data entry belongs to.
+            case 98: case 99:
+                m_lastNrpn[channel] = ((m_ccState[channel][99] == 0xFF ? 0 : m_ccState[channel][99]) << 7)
+                                    |  (m_ccState[channel][98] == 0xFF ? 0 : m_ccState[channel][98]);
+                m_lastRpn[channel] = -1;
+                break;
+            case 100: case 101:
+                m_lastRpn[channel] = ((m_ccState[channel][101] == 0xFF ? 0 : m_ccState[channel][101]) << 7)
+                                   |  (m_ccState[channel][100] == 0xFF ? 0 : m_ccState[channel][100]);
+                m_lastNrpn[channel] = -1;
+                break;
+            // File the data entry against whichever parameter is selected, and
+            // KEEP IT - one slot per address, not one slot per channel. RPN
+            // 0x3FFF is the null address ("deselect"), which carries no value.
+            case 6: case 38: {
+                const bool bLsb = (data1 == 38);
+                int addr = -1;
+                QMap<int, int>* pMap = nullptr;
+                if (m_lastNrpn[channel] >= 0)      { addr = m_lastNrpn[channel]; pMap = &m_nrpnValues[channel]; }
+                else if (m_lastRpn[channel] >= 0)  { addr = m_lastRpn[channel];  pMap = &m_rpnValues[channel];  }
+                if (!pMap || addr < 0 || addr == 0x3FFF) break;
+                // bits 0-7 LSB, bits 8-15 MSB, bit 16 "MSB written",
+                // bit 17 "LSB written". A plain (msb<<8)|lsb cannot say which
+                // halves the song actually sent, and sending an LSB the song
+                // never sent is itself a parameter change.
+                int packed = pMap->value(addr, 0);
+                if (bLsb) packed = (packed & ~0x00FF) | data2       | (1 << 17);
+                else      packed = (packed & ~0xFF00) | (data2 << 8) | (1 << 16);
+                pMap->insert(addr, packed);
+                break;
+            }
         }
     } else if ((status & 0xF0) == 0xC0) {
         // Program Change
@@ -1849,21 +2236,75 @@ void MidiPlayer::sendCurrentChannelState()
     if (!connected || (!hMidiOut && !m_useInternalSynth)) return;
 
     for (int channel = 0; channel < 16; channel++) {
-        // Send control changes
-        sendMidiMessage(0xB0 | channel, 1, currentChannelState[channel].modWheel);
+        // Bank select FIRST, then the program - a program change picks its
+        // sound from whichever bank is current, so sending it on its own puts
+        // the channel on the right program number in the wrong bank. That is
+        // what made a seek change the instrument while the channel monitor went
+        // on naming the one the song asked for.
+        if (m_ccState[channel][0]  != 0xFF) sendMidiMessage(0xB0 | channel, 0,  m_ccState[channel][0]);
+        if (m_ccState[channel][32] != 0xFF) sendMidiMessage(0xB0 | channel, 32, m_ccState[channel][32]);
 
-        // Apply master volume to channel volume ONLY if not using internal synth
-        int adjustedVolume = currentChannelState[channel].volume;
-        if (!m_useInternalSynth) {
-            adjustedVolume = (adjustedVolume * currentVolume) / 127;
-        }
-        sendMidiMessage(0xB0 | channel, 7, qBound(0, adjustedVolume, 127));
-
-        sendMidiMessage(0xB0 | channel, 11, currentChannelState[channel].expression);
-        sendMidiMessage(0xB0 | channel, 64, currentChannelState[channel].sustain);
-
-        // Send program change
         sendMidiMessage(0xC0 | channel, currentChannelState[channel].program, 0);
+
+        // Everything the song actually touched, in controller order. The
+        // data-entry and parameter-select pairs are held back and sent as
+        // groups below, because their meaning depends on what was selected
+        // last and sending them in numeric order would attach the value to the
+        // wrong parameter.
+        for (int cc = 1; cc < 128; ++cc) {
+            if (cc == 6 || cc == 32 || cc == 38 || cc == 98 || cc == 99 || cc == 100 || cc == 101)
+                continue;
+            // 120-127 are channel MODE messages - all sound off, all notes off,
+            // and above all 121, reset all controllers. They are momentary
+            // commands, not state, and replaying them here is actively
+            // destructive: 121 arrives after the volume, pan and expression
+            // just restored above and puts every one of them back to its
+            // default (tsf.h, ALL_CTRL_OFF - volume and expression to full, pan
+            // to centre, bank to 0, pitch range to 2). Seeking came out louder
+            // and differently voiced than playing through.
+            if (cc >= 120) continue;
+            if (m_ccState[channel][cc] == 0xFF) continue;
+            int value = m_ccState[channel][cc];
+            // Master volume rides on CC7 for external modules only.
+            if (cc == 7 && !m_useInternalSynth)
+                value = qBound(0, (value * currentVolume) / 127, 127);
+            sendMidiMessage(0xB0 | channel, cc, value);
+        }
+
+        // Replay EVERY parameter the song wrote on this channel, each against
+        // its own address and with its own value.
+        //
+        // This used to send only the last-selected address, and to hand BOTH
+        // the NRPN and the RPN group the same `m_ccState[6]` - the single most
+        // recent data entry. 6PONGI4 writes 6 to 20 parameters per channel
+        // (vibrato, TVF cutoff/resonance, envelope, and 20 drum settings on
+        // channel 10), so a seek restored one of them and gave it a value that
+        // belonged to a different parameter. That is what "the instrument
+        // sounds different after seeking" was, on both .MID and .RCP - it was
+        // never an RCP fault, and the internal SoundFont cannot show it because
+        // TinySoundFont ignores NRPN completely.
+        auto replayParams = [&](int msbCc, int lsbCc, const QMap<int, int>& params) {
+            for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
+                const int addr = it.key();
+                const int packed = it.value();
+                sendMidiMessage(0xB0 | channel, msbCc, (addr >> 7) & 0x7F);
+                sendMidiMessage(0xB0 | channel, lsbCc, addr & 0x7F);
+                if (packed & (1 << 16)) sendMidiMessage(0xB0 | channel, 6,  (packed >> 8) & 0x7F);
+                if (packed & (1 << 17)) sendMidiMessage(0xB0 | channel, 38,  packed       & 0x7F);
+            }
+        };
+        replayParams(99, 98, m_nrpnValues[channel]);
+        replayParams(101, 100, m_rpnValues[channel]);
+
+        // Leave the channel selecting what the song had selected at this point,
+        // so a data entry arriving after the seek lands where it would have.
+        if (m_lastNrpn[channel] >= 0) {
+            sendMidiMessage(0xB0 | channel, 99, (m_lastNrpn[channel] >> 7) & 0x7F);
+            sendMidiMessage(0xB0 | channel, 98,  m_lastNrpn[channel]       & 0x7F);
+        } else if (m_lastRpn[channel] >= 0) {
+            sendMidiMessage(0xB0 | channel, 101, (m_lastRpn[channel] >> 7) & 0x7F);
+            sendMidiMessage(0xB0 | channel, 100,  m_lastRpn[channel]       & 0x7F);
+        }
 
         // Send pitch bend
         int pitchBend = currentChannelState[channel].pitchBend;
@@ -2310,7 +2751,6 @@ void MidiPlayer::setUserKeyTranspose(int key)
 
 int MidiPlayer::getUserKeyTranspose() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
     return m_userKeyTranspose;
 }
 
@@ -2339,13 +2779,12 @@ void MidiPlayer::setUserTempoScale(int scale)
 
 int MidiPlayer::getUserTempoScale() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
     return m_userTempoScale;
 }
 
 int MidiPlayer::getCurrentBpm() const
 {
-    QMutexLocker locker(const_cast<QMutex*>(&stateMutex));
+    // No lock - see isPlaying().
     if (currentTempo == 0) return 120;
     double baseBpm = 60000000.0 / currentTempo;
     return static_cast<int>(baseBpm * (m_userTempoScale / 100.0) + 0.5);

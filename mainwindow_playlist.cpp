@@ -12,6 +12,9 @@
 #include "oplstereodialog.h"
 #include <QCloseEvent>
 #include <QLocale>
+#include <QElapsedTimer>
+#include <QCoreApplication>
+#include <QEventLoop>
 #include "nobfilehandler.h"
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
@@ -68,7 +71,7 @@ void MainWindow::openFile()
     QString defaultDir = SettingsManager::instance().value("General/lastOpenDirectory", getActualExecutablePath()).toString();
 
     QStringList fileNames = QFileDialog::getOpenFileNames(this,
-        "Open MIDI Files", defaultDir, "Music Files (*.mid *.midi *.nob *.ims *.rol *.sop *.gyb *.oka *.okm *.vgm *.vgz *.zip);;All Files (*)");
+        "Open MIDI Files", defaultDir, FolderScanner::openDialogFilter());
 
     if (!fileNames.isEmpty()) {
         for (const QString &fileName : fileNames) {
@@ -230,8 +233,47 @@ void MainWindow::onCleanupPlaylist()
     }
 
     int removedCount = 0;
+    int retitledCount = 0;
     int addedFilesCount = 0;
     int addedFoldersCount = 0;
+
+    // Refresh walks the whole tree on the GUI thread, checking every folder
+    // against the filesystem. On a large playlist that is many seconds with no
+    // repaint, and Windows draws the "not responding" ghost over it - so it
+    // reads as a hang rather than as work.
+    //
+    // Rather than move the walk to a thread - which would need the tree to be
+    // safe to touch from two places at once, and it is not - the loop reports
+    // where it is and lets the window repaint. processEvents() is called with
+    // ExcludeUserInputEvents on purpose: the paint gets through, clicks and
+    // keys stay queued, so nothing can re-enter this function half way down its
+    // own tree.
+    int visited = 0;
+    int totalNodes = 0;
+    std::function<void(PlaylistTreeNode*)> countNodes = [&](PlaylistTreeNode* n) {
+        if (!n) return;
+        for (PlaylistTreeNode* c : n->children) {
+            ++totalNodes;
+            if (c->isFolder) countNodes(c);
+        }
+    };
+    countNodes(playlistRoot);
+
+    const QString titleBeforeRefresh = windowTitle();
+    QElapsedTimer paintClock;
+    paintClock.start();
+    setCursor(Qt::BusyCursor);
+
+    auto showProgress = [&](bool force) {
+        if (!force && paintClock.elapsed() < 100) return;
+        paintClock.restart();
+        const QLocale loc;
+        setWindowTitle(LSTR(u8"재생목록 새로 고침", "Refreshing playlist")
+                       + QString(" - %1 / %2").arg(loc.toString(visited),
+                                                   loc.toString(totalNodes)));
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    };
+    showProgress(true);
 
     // ?뚮줈???쒕씪?대툕(A:\, B:\) 寃쎈줈?몄? ?뺤씤?섍퀬, ?쒕씪?대툕媛 以鍮꾨릺吏 ?딆? 寃쎌슦 嫄대꼫?
     // QFileInfo::exists()媛 誘몄궫???쒕씪?대툕?먯꽌 ??珥덇컙 UI瑜?釉붾줉?섎뒗 臾몄젣 諛⑹?
@@ -275,6 +317,8 @@ void MainWindow::onCleanupPlaylist()
 
         // Check files and folders in this node
         for (PlaylistTreeNode* child : node->children) {
+            ++visited;
+            showProgress(false);
             if (child->isFolder) {
                 // For folders, check if folder still exists
                 if (!child->fullPath.isEmpty()) {
@@ -291,21 +335,41 @@ void MainWindow::onCleanupPlaylist()
                             existingFolders.append(childNode->fullPath);
                         } else {
                             existingFiles.append(childNode->fullPath);
+                            // Retry the title on rows that have none. Names are
+                            // cached in playlist.json, so a row scanned before
+                            // its format could be read kept the filename for
+                            // good - which is what "I refreshed and the VGM
+                            // titles are still missing" was.
+                            //
+                            // Only rows WITHOUT a title are re-read, so this
+                            // costs nothing on a library that is already named
+                            // and cannot undo a name the user is looking at.
+                            if (!childNode->name.contains(" - ")) {
+                                const QString named = FolderScanner::displayNameFor(
+                                    QFileInfo(childNode->fullPath));
+                                if (named.contains(" - ")) {
+                                    childNode->name = named;
+                                    retitledCount++;
+                                }
+                            }
                         }
                     }
 
                     QDir dir(child->fullPath);
-                    QStringList filters;
-                    filters << "*.mid" << "*.midi" << "*.nob" << "*.ims" << "*.rol" << "*.sop" << "*.gyb"
-                            << "*.oka" << "*.okm" << "*.vgm" << "*.vgz";
+                    // The scanner's own list, not a copy of it - this one had
+                    // drifted and was missing *.okw.
+                    const QStringList& filters = FolderScanner::playableFilters();
 
                     // Check for new files in current directory
                     QFileInfoList files = dir.entryInfoList(filters, QDir::Files);
                     for (const QFileInfo &fileInfo : files) {
                         QString newFile = fileInfo.absoluteFilePath();
                         if (!existingFiles.contains(newFile)) {
+                            // Named the same way the scan names one. This used
+                            // to take the bare filename, so a file that turned
+                            // up after the first scan could never show a title.
                             PlaylistTreeNode* newNode = new PlaylistTreeNode(
-                                QFileInfo(newFile).fileName(),
+                                FolderScanner::displayNameFor(fileInfo),
                                 newFile,
                                 false,
                                 false
@@ -364,6 +428,9 @@ void MainWindow::onCleanupPlaylist()
 
     cleanupNode(playlistRoot);
 
+    unsetCursor();
+    setWindowTitle(titleBeforeRefresh);
+
     // Save the updated playlist immediately (user-initiated action)
     savePlaylistTree();
 
@@ -372,7 +439,7 @@ void MainWindow::onCleanupPlaylist()
 
     // Show summary
     QString message;
-    if (removedCount > 0 || addedFilesCount > 0 || addedFoldersCount > 0) {
+    if (removedCount > 0 || addedFilesCount > 0 || addedFoldersCount > 0 || retitledCount > 0) {
         QStringList changes;
         if (removedCount > 0) {
             changes << QString("Removed %1 missing item(s)").arg(removedCount);
@@ -382,6 +449,9 @@ void MainWindow::onCleanupPlaylist()
         }
         if (addedFilesCount > 0) {
             changes << QString("Added %1 file(s)").arg(addedFilesCount);
+        }
+        if (retitledCount > 0) {
+            changes << QString("Found titles for %1 file(s)").arg(retitledCount);
         }
         message = QString("Refresh complete:\n- %1").arg(changes.join("\n- "));
     } else {
@@ -474,7 +544,7 @@ void MainWindow::addMidiFiles(const QStringList &filePaths)
         if (fileInfo.isFile()) {
             // MIDI ?뚯씪 諛?NOB ?뚯씪 紐⑤몢 異붽? 吏€??
             QString suffix = fileInfo.suffix().toLower();
-            if (suffix == "mid" || suffix == "midi" || suffix == "nob" || suffix == "ims" || suffix == "rol" || suffix == "zip" || suffix == "sop" || suffix == "gyb" || suffix == "oka" || suffix == "okm") {
+            if (FolderScanner::isPlayableSuffix(suffix) || suffix == "zip") {
                 // Add file to current node in tree
                 // addFileToCurrentNode() ?대??먯꽌 updateUIFromCurrentNode()?€ savePlaylistTree()瑜??몄텧?섎?濡?蹂꾨룄 UI 泥섎━ 遺덊븘??
                 addFileToCurrentNode(fileInfo.absoluteFilePath());
@@ -510,7 +580,7 @@ QStringList MainWindow::findMidiFilesInDirectory(const QString &dirPath)
     QStringList midiFiles;
     QDir dir(dirPath);
     QStringList filters;
-    filters << "*.mid" << "*.midi" << "*.nob" << "*.ims" << "*.rol" << "*.sop" << "*.gyb" << "*.oka" << "*.okm" << "*.vgm" << "*.vgz";
+    filters = FolderScanner::playableFilters();
 
     // Get files in current directory
     QFileInfoList files = dir.entryInfoList(filters, QDir::Files);
@@ -626,7 +696,7 @@ void MainWindow::navigateToFolderWithoutHistory(const QString &folderPath)
 
     // Add MIDI files
     QStringList filters;
-    filters << "*.mid" << "*.midi" << "*.nob" << "*.ims" << "*.rol" << "*.sop" << "*.gyb" << "*.oka" << "*.okm" << "*.vgm" << "*.vgz";
+    filters = FolderScanner::playableFilters();
     QFileInfoList midiFiles = dir.entryInfoList(filters, QDir::Files, QDir::Name);
     for (const QFileInfo &fileInfo : midiFiles) {
         rows.append(PlaylistRow("🎵" + fileInfo.fileName(), fileInfo.absoluteFilePath(), MIDI_FILE));
@@ -1089,7 +1159,7 @@ void MainWindow::addFileToCurrentNodeWithoutSave(const QString &filePath)
                     QString innerPath = entry.filePath;
                     QFileInfo innerInfo(innerPath);
                     QString suffix = innerInfo.suffix().toLower();
-                    if (suffix == "mid" || suffix == "midi" || suffix == "nob" || suffix == "ims" || suffix == "rol" || suffix == "sop" || suffix == "gyb" || suffix == "oka" || suffix == "okm") {
+                    if (FolderScanner::isPlayableSuffix(suffix)) {
                         QString title;
                         QByteArray innerData = zip.fileData(innerPath);
                         if (suffix == "nob") {
@@ -1098,7 +1168,7 @@ void MainWindow::addFileToCurrentNodeWithoutSave(const QString &filePath)
                             title = GybFileHandler::extractTitle(innerData);
                         } else if (suffix == "ims") {
                             title = ImsPlayer::extractTitleQuick(innerData, ".ims");
-                        } else if (suffix == "oka" || suffix == "okm") {
+                        } else if (suffix == "oka" || suffix == "okm" || suffix == "okw") {
                             title = OkaFileHandler::extractTitle(innerData);
                         }
 
@@ -1572,7 +1642,7 @@ void MainWindow::loadPlaylistTree()
             std::function<void(PlaylistTreeNode*, const QString&)> addSync = [&](PlaylistTreeNode* parent, const QString& path) {
                 QDir dir(path);
                 QStringList filters;
-                filters << "*.mid" << "*.midi" << "*.nob" << "*.ims" << "*.rol" << "*.sop" << "*.gyb" << "*.oka" << "*.okm" << "*.vgm" << "*.vgz";
+                filters = FolderScanner::playableFilters();
                 QFileInfoList files = dir.entryInfoList(filters, QDir::Files);
                 for (const QFileInfo &fi : files) {
                     QString disp = "🎵 " + fi.fileName();
@@ -1658,7 +1728,7 @@ void MainWindow::addFolderStructureToTree(PlaylistTreeNode* parentNode, const QS
 
     // Add MIDI files
     QStringList filters;
-    filters << "*.mid" << "*.midi" << "*.nob" << "*.ims" << "*.rol" << "*.sop" << "*.gyb" << "*.oka" << "*.okm" << "*.vgm" << "*.vgz";
+    filters = FolderScanner::playableFilters();
     QFileInfoList midiFiles = dir.entryInfoList(filters, QDir::Files);
     for (const QFileInfo &fileInfo : midiFiles) {
         QString displayName = "♫ " + fileInfo.fileName();
@@ -1884,7 +1954,7 @@ PlaylistTreeNode* MainWindow::nodeFromJson(const QJsonObject &json, PlaylistTree
                         QString innerPath = entry.filePath;
                         QFileInfo innerInfo(innerPath);
                         QString suffix = innerInfo.suffix().toLower();
-                        if (suffix == "mid" || suffix == "midi" || suffix == "nob" || suffix == "ims" || suffix == "rol" || suffix == "sop" || suffix == "gyb" || suffix == "oka" || suffix == "okm") {
+                        if (FolderScanner::isPlayableSuffix(suffix)) {
                             QString title;
                             QByteArray innerData = zip.fileData(innerPath);
                             if (suffix == "nob") {
@@ -1893,7 +1963,7 @@ PlaylistTreeNode* MainWindow::nodeFromJson(const QJsonObject &json, PlaylistTree
                                 title = GybFileHandler::extractTitle(innerData);
                             } else if (suffix == "ims") {
                                 title = ImsPlayer::extractTitleQuick(innerData, ".ims");
-                            } else if (suffix == "oka" || suffix == "okm") {
+                            } else if (suffix == "oka" || suffix == "okm" || suffix == "okw") {
                                 title = OkaFileHandler::extractTitle(innerData);
                             }
 

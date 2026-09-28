@@ -1,16 +1,26 @@
-# JMPlayer V3.0.0 beta — User Manual
+# JMPlayer V3.1.1 — User Manual
 
 *[한국어 매뉴얼은 여기 → MANUAL.ko.md](MANUAL.ko.md)*
 
 JMPlayer is a retro music player for Windows that plays standard MIDI files and 1990s Korean DOS-era music/karaoke formats, using SoundFont synthesis and software OPL3 (AdLib) FM emulation.
 
-> **New in V3.0.0 beta**
+> **New in V3.1.1**
 >
-> * **A built-in MT-32 / CM-32L** — the Roland MT-32 now plays inside the program, front panel and ROM selector included (section 12).
-> * **A GM / MT-32 switch in the F5 instrument list** — choose which module a `.gyb` / `.oka` played through MIDI should be matched to (section 15).
-> * Fixed an uneven, drifting tempo while playing `.ims` / `.rol` / `.sop`.
+> * **`.MDX` sound and timing** — ADPCM (PCM) samples are decoded in the right nibble order, so drums sound as they should, and the X68000's output filter is reproduced. Loop escapes are now honoured, which fixes channels drifting apart. PDX bank select (`@n`), PCM rate (`F`) and PCM panning follow the original driver.
+> * **`.MDX` seeking** — songs that end without looping were measured at twice their length, so seeking past the middle skipped to the next song. Fixed.
+> * **Mixed `.mdz` (MLD)** — the MIDI and FM/PCM halves now stay on the same beat (lead-in tempo, the hardware-LFO command, a one-tick offset). Pause, seek and F7–F11 tempo/transpose now move the FM half too.
+> * **CM-32L `.mdz`** — timbre data a song carries is now sent to the MT-32, so songs such as NEW_Wa whose MIDI half was silent now play.
+> * Fixed some `.mdz` files (those with a 32-bit offset table) playing silence.
+> * **Volume** — the Volume slider now also controls a `.mdz`'s FM/PCM half while playing. The FM/MIDI balance has its own row under Volume (`MIDI◀ ▶FM`).
+> * Fixed the lyrics window keeping the previous song's text when an `.MDX` plays.
 >
-> This is a test build ahead of the final V3.0.0.
+> **New in V3.1.0**
+>
+> * **Ballade `.SNG` playback** — song files from Dynaware's PC-9801 sequencer Ballade and the ミュージくん / ミュージ郎 packages. The extension is shared with Recomposer, so the file itself decides which is which.
+> * **FM for `.mdz` (MLD)** — the X68000 MLD driver's OPM / ADPCM parts now play alongside its MIDI parts.
+> * **More VGM chips** — YM2413, AY8910, SegaPCM, YM2610 and QSound, so MSX, arcade, Neo Geo and CPS2 rips play.
+> * Fixed VGM track titles (the GD3 tag) coming out as question marks.
+> * Fixed `.rcp`, `.vgm` and `.okw` showing only a filename in the title bar, and playlist Refresh now fills in titles it never had.
 
 ---
 
@@ -26,7 +36,11 @@ JMPlayer is a retro music player for Windows that plays standard MIDI files and 
 | `.ims` (+`.iss`) | IMS AdLib music (+ISS lyric file) | OPL3 emulation | ✔ (with .iss) |
 | `.rol` | AdLib Visual Composer | OPL3 emulation | – |
 | `.sop` | Note (sopepos) | OPL3 emulation | – |
-| `.vgm` `.vgz` | VGM chiptune logs (OPL) | OPL3 emulation | – |
+| `.vgm` `.vgz` | VGM chiptune logs | OPL3 emulation, or SN76489 / YM2612 / YM2151 / YM2413 / AY8910 / SegaPCM / YM2610 / QSound / Game Boy | – |
+| `.rcp` | Recomposer (PC-98 / X68000) | SoundFont, MIDI device, Nuked SC-55, MT-32 | – |
+| `.sng` | Ballade / ミュージくん / ミュージ郎 (PC-98) | as above | – |
+| `.mdx` | Sharp X68000 MXDRV | YM2151 + ADPCM | – |
+| `.mdz` | Sharp X68000 MLD | YM2151 + ADPCM, and/or a MIDI module | – |
 | `.zip` | Archive containing any of the above | (auto-extracted) | – |
 
 ## 2. Main Window

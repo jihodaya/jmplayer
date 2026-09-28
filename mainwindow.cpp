@@ -14,13 +14,16 @@
 #include "gybfilehandler.h"
 #include "okafilehandler.h"
 #include "okaplayer.h"
+#include "mdxplayer.h"
+#include "mldfmplayer.h"
+#include <QToolTip>
+#include "vgmplayer.h"
 #include "okabackend.h"
 #include "soundfontmanagerdialog.h"
 #include "imsplayer.h"
 #include "gybplayer.h"
 #include "opltunnelsender.h"
 #include <QShortcut>
-#include <QToolTip>
 #include <QCursor>
 #include <QApplication>
 #include <QStatusBar>
@@ -178,6 +181,10 @@ MainWindow::MainWindow(QWidget *parent)
     imsPlayer = new ImsPlayer(this);
     gybPlayer = new GybPlayer(this);
     okaPlayer = new OkaPlayer(this);
+    mdxPlayer = new MdxPlayer(this);
+    mldFmPlayer = new MldFmPlayer(this);
+    JJoMeSynth::instance().setMldFmPlayer(mldFmPlayer);
+    vgmPlayer = new VgmPlayer(this);
 
     // OPL register tunnel (M2, IMS/ROL/SOP): stream jmp's OPL writes to the
     // bare-metal jukebox over the selected MIDI device. The sender thread calls
@@ -813,11 +820,64 @@ void MainWindow::setupUI()
     volumeValue->setMinimumWidth(volumeValue->fontMetrics().horizontalAdvance("100%"));
     volumeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
+    // The FM / MIDI balance, for the MLD songs that carry both halves.
+    //
+    // It exists because the answer is not in the file: on real hardware the
+    // X68000's FM output and the module's line output were two machines
+    // meeting at somebody's mixer, and nothing in a .mdz records where the
+    // knobs were. Measured over three songs the natural ratio runs from
+    // -11.2 dB to +5.1 dB, so any fixed choice would be wrong twice.
+    //
+    // Note what it CANNOT do: the MIDI side is only attenuated when that half
+    // is going through jmp's own synth. Nuked-SC55 and a real port are outside
+    // this program and their level is not ours to touch - so with those
+    // selected, only the FM side of the slider does anything.
+    fmBalanceLabel = new QLabel(QString("FM:"), this);
+    fmBalanceSlider = new QSlider(Qt::Horizontal, this);
+    fmBalanceSlider->setRange(0, 100);
+    fmBalanceSlider->setValue(50);
+    fmBalanceSlider->setMaximumWidth(80);
+    fmBalanceSlider->setToolTip(LSTR(
+        "FM/MIDI 균형입니다(볼륨이 아님). 가운데가 파일이 지정한 그대로, "
+        "왼쪽으로 갈수록 MIDI만, 오른쪽으로 갈수록 FM/PCM만 남습니다. "
+        "연주 중에도 바로 바뀌고, 가운데 근처에서 가운데로 붙습니다. "
+        "전체 음량은 위의 Volume입니다.",
+        "FM/MIDI balance, not a volume. Centre is what the files ask for; left "
+        "leaves the MIDI half alone, right the FM/PCM half. Takes effect while "
+        "playing and snaps to the centre near it. Overall level is the Volume "
+        "slider above."));
+    fmBalanceValue = new QLabel(LSTR("기본", "even"), this);
+
+    // Two rows of the same shape - label, slider, readout - so the balance
+    // reads as a separate control under the volume rather than as a second
+    // volume squeezed beside it (asked for 2026-09-28). The labels and the
+    // readouts share a width, which keeps the two sliders exactly aligned.
+    fmBalanceLabel->setText(LSTR("MIDI◀ ▶FM:", "MIDI◀ ▶FM:"));
+    const int labelW = std::max(volumeLabel->fontMetrics().horizontalAdvance(volumeLabel->text()),
+                                fmBalanceLabel->fontMetrics().horizontalAdvance(fmBalanceLabel->text())) + 4;
+    volumeLabel->setFixedWidth(labelW);
+    fmBalanceLabel->setFixedWidth(labelW);
+    const int valueW = std::max(volumeValue->minimumWidth(),
+                                fmBalanceValue->fontMetrics().horizontalAdvance("MIDI 100%") + 4);
+    volumeValue->setMinimumWidth(valueW);
+    fmBalanceValue->setMinimumWidth(valueW);
+    fmBalanceValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    fmBalanceSlider->setMaximumWidth(QWIDGETSIZE_MAX);
+    fmBalanceLabel->setVisible(false);
+    fmBalanceSlider->setVisible(false);
+    fmBalanceValue->setVisible(false);
+
     volumeLayout->addWidget(volumeLabel);
     volumeLayout->addWidget(volumeSlider);
     volumeLayout->addWidget(volumeValue);
 
+    balanceLayout = new QHBoxLayout();
+    balanceLayout->addWidget(fmBalanceLabel);
+    balanceLayout->addWidget(fmBalanceSlider);
+    balanceLayout->addWidget(fmBalanceValue);
+
     mainLayout->addLayout(volumeLayout);
+    mainLayout->addLayout(balanceLayout);
 
     updateWindowTitle();
     resize(400, 600);
@@ -1000,6 +1060,7 @@ void MainWindow::connectSignals()
     connect(fwButton, &QPushButton::clicked, this, &MainWindow::fastForward);
 
     connect(volumeSlider, &QSlider::valueChanged, this, &MainWindow::onVolumeChanged);
+    connect(fmBalanceSlider, &QSlider::valueChanged, this, &MainWindow::onFmBalanceChanged);
     connect(progressSlider, &QSlider::valueChanged, this, &MainWindow::onPositionChanged);
     connect(progressSlider, &QSlider::sliderPressed, [this]() {
         isUserDragging = true;
@@ -1031,6 +1092,18 @@ void MainWindow::connectSignals()
             if (dur > 0) {
                 unsigned long newPosition = (static_cast<unsigned long long>(value) * dur) / 100;
                 okaPlayer->setPosition(newPosition);
+            }
+        } else if (isVgmFile(currentFile)) {
+            unsigned long dur = vgmPlayer->getDuration();
+            if (dur > 0) {
+                unsigned long newPosition = (static_cast<unsigned long long>(value) * dur) / 100;
+                vgmPlayer->setPosition(newPosition);
+            }
+        } else if (isMdxFile(currentFile)) {
+            unsigned long dur = mdxPlayer->getDuration();
+            if (dur > 0) {
+                unsigned long newPosition = (static_cast<unsigned long long>(value) * dur) / 100;
+                mdxPlayer->setPosition(newPosition);
             }
         } else if (midiPlayer->getTotalDuration() > 0) {
             unsigned long newPosition = (value * midiPlayer->getTotalDuration()) / 100;
@@ -1068,10 +1141,17 @@ void MainWindow::connectSignals()
     connect(channelUpdateTimer, &QTimer::timeout, this, &MainWindow::forceChannelUpdate);
     connect(windowPositionTimer, &QTimer::timeout, this, &MainWindow::checkWindowPosition);
     connect(midiPlayer, &MidiPlayer::finished, this, &MainWindow::onPlaybackFinished);
+    // The MLD FM half follows every seek the MIDI half makes - slider, arrow
+    // keys, rewind, resume-at - from the one place they all end up.
+    connect(midiPlayer, &MidiPlayer::seeked, this, [this](unsigned long ms) {
+        if (mldFmPlayer && mldFmPlayer->isLoaded()) mldFmPlayer->seekMs(ms);
+    });
     connect(imsPlayer, &ImsPlayer::finished, this, &MainWindow::onPlaybackFinished);
     // Without this, GYB songs never trigger the end-of-track logic, so the
     // repeat / shuffle / next-track UI never advances.
     connect(gybPlayer, &GybPlayer::finished, this, &MainWindow::onPlaybackFinished);
+    connect(mdxPlayer, &MdxPlayer::finished, this, &MainWindow::onPlaybackFinished);
+    connect(vgmPlayer, &VgmPlayer::finished, this, &MainWindow::onPlaybackFinished);
     connect(okaPlayer, &OkaPlayer::finished, this, &MainWindow::onPlaybackFinished);
 
     connect(midiPlayer, &MidiPlayer::errorOccurred, [this](const QString &error) {
@@ -1173,6 +1253,7 @@ void MainWindow::saveSettings()
     int currentRow = plCurrentRow();
     settings.setValue("General/currentTrackIndex", currentRow);
     settings.setValue("General/volume", volumeSlider->value());
+    settings.setValue("General/fmBalance", fmBalanceSlider->value());
     settings.setValue("General/repeatMode", repeatMode);
     settings.setValue("General/selectedDevice", deviceComboBox->currentIndex());
     settings.setValue("General/lastUsedDevice", deviceComboBox->currentText());
@@ -1281,6 +1362,9 @@ void MainWindow::loadSettings()
         midiPlayer->midiReset().SetEnabled(settings.value("Midi/ResetEnabled", false).toBool());
         midiPlayer->midiReset().SetFlags(settings.value("Midi/ResetFlags",
                                          (unsigned)MidiReset::DefaultGMGS).toUInt());
+        // Hand SysEx over this much slower than a MIDI cable (percent). The
+        // default is cable speed; a slow USB-MIDI bridge may need more.
+        midiPlayer->setSysExPacePct(settings.value("Midi/SysExPacePct", 100).toInt());
         midiPlayer->midiReset().SetInterMessageDelayMs(
             settings.value("Midi/ResetDelayMs", MidiReset::DefaultDelayMs).toUInt());
     }
@@ -1585,6 +1669,20 @@ void MainWindow::toggleChannelMonitor()
         });
 
         // Keep legacy signal for compatibility but don't use it when reliability is available
+        // A song whose opening SysEx is big enough to be a visible wait says so
+        // instead of looking frozen - the same reasoning as the playlist-scan
+        // counter. It is not a progress bar because the total is not known until
+        // the burst ends; the KB count rising is enough to show it is working.
+        // Only fires past 1 KB, which 97.7% of the library never reaches.
+        connect(midiPlayer, &MidiPlayer::sysExTransfer, this,
+                [this](bool active, int kbSent) {
+            if (active)
+                setWindowTitle(LSTR(u8"음색 데이터 전송 중... %1 KB",
+                                    "Sending patch data... %1 KB").arg(kbSent));
+            else
+                updateWindowTitle();
+        });
+
         connect(midiPlayer, &MidiPlayer::soundModeDetected, [this](int mode) {
             // This will be called but setSoundMode will be called again by reliability signal
         });
@@ -1644,6 +1742,12 @@ void MainWindow::toggleChannelMonitor()
             // monitor layout (not the GM MIDI grid) and refresh per-voice patches.
             channelMonitor->setImsMode(true, okaPlayer->getBankName(), okaPlayer->getInstruments(), "OKA");
             channelMonitor->updateVoiceInstrumentNames(okaPlayer->getVoiceInstrumentNames());
+        } else if (isMdxFile(currentFile)) {
+            channelMonitor->setImsMode(true, mdxPlayer->getBankName(), mdxPlayer->getInstruments(), "MDX");
+            channelMonitor->updateVoiceInstrumentNames(mdxPlayer->getVoiceInstrumentNames());
+        } else if (isVgmFile(currentFile)) {
+            channelMonitor->setImsMode(true, vgmPlayer->getBankName(), vgmPlayer->getInstruments(), "VGM");
+            channelMonitor->updateVoiceInstrumentNames(vgmPlayer->getVoiceInstrumentNames());
         } else if (currentlyIms && imsPlayer) {
             channelMonitor->setImsMode(true, imsPlayer->getBankName(), imsPlayer->getInstruments(), QFileInfo(currentFile).suffix().toUpper());
             channelMonitor->updateVoiceInstrumentNames(imsPlayer->getVoiceInstrumentNames());
@@ -1870,10 +1974,16 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
         // Seek + tempo/key hotkeys while a track is playing. (Up/Down and +/- are
         // already handled above as playlist navigation / volume.)
+        // MDX and VGM were missing from this list, and it gates everything
+        // below it - so on those two formats the arrow keys did not seek and
+        // F7 to F11 did nothing, while the progress bar (which does not come
+        // through here) seeked perfectly well.
         bool hasTrack = (midiPlayer && midiPlayer->getTotalDuration() > 0)
                      || (imsPlayer && imsPlayer->getDuration() > 0 && isOplFile(currentFile))
                      || (gybPlayer && gybPlayer->getDuration() > 0 && isGybFile(currentFile))
-                     || (okaPlayer && okaPlayer->getDuration() > 0 && isOkaFile(currentFile));
+                     || (okaPlayer && okaPlayer->getDuration() > 0 && isOkaFile(currentFile))
+                     || (mdxPlayer && mdxPlayer->getDuration() > 0 && isMdxFile(currentFile))
+                     || (vgmPlayer && vgmPlayer->getDuration() > 0 && isVgmFile(currentFile));
         if (hasTrack && isPlaying) {
             if (keyEvent->key() == Qt::Key_Left) {
                 rewind();
@@ -1891,6 +2001,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                 bool isGyb = isGybFile(currentFile);
                 bool isOka = isOkaFile(currentFile);
                 bool playOkaViaOpl = isOkaOplFile(currentFile);
+                bool isMdx = isMdxFile(currentFile);
 
                 if (keyEvent->key() == Qt::Key_F7) {
                     if (isGyb && gybPlayer) {
@@ -1902,9 +2013,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     } else if (playOkaViaOpl && okaPlayer) {
                         int currentScale = okaPlayer->getUserTempoScale();
                         okaPlayer->setUserTempoScale(qMax(50, currentScale - 5));
+                    } else if (isMdx && mdxPlayer) {
+                        int currentScale = mdxPlayer->getUserTempoScale();
+                        mdxPlayer->setUserTempoScale(qMax(50, currentScale - 5));
                     } else if (midiPlayer) {
                         int currentScale = midiPlayer->getUserTempoScale();
                         midiPlayer->setUserTempoScale(qMax(50, currentScale - 5));
+                        if (mldFmPlayer) mldFmPlayer->setTempoScale(midiPlayer->getUserTempoScale());
                     }
                     updateTimeDisplay();
                     return true;
@@ -1919,9 +2034,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     } else if (playOkaViaOpl && okaPlayer) {
                         int currentScale = okaPlayer->getUserTempoScale();
                         okaPlayer->setUserTempoScale(qMin(150, currentScale + 5));
+                    } else if (isMdx && mdxPlayer) {
+                        int currentScale = mdxPlayer->getUserTempoScale();
+                        mdxPlayer->setUserTempoScale(qMin(150, currentScale + 5));
                     } else if (midiPlayer) {
                         int currentScale = midiPlayer->getUserTempoScale();
                         midiPlayer->setUserTempoScale(qMin(150, currentScale + 5));
+                        if (mldFmPlayer) mldFmPlayer->setTempoScale(midiPlayer->getUserTempoScale());
                     }
                     updateTimeDisplay();
                     return true;
@@ -1936,9 +2055,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     } else if (playOkaViaOpl && okaPlayer) {
                         int currentTranspose = okaPlayer->getUserKeyTranspose();
                         okaPlayer->setUserKeyTranspose(qMax(-6, currentTranspose - 1));
+                    } else if (isMdx && mdxPlayer) {
+                        int currentTranspose = mdxPlayer->getUserKeyTranspose();
+                        mdxPlayer->setUserKeyTranspose(qMax(-6, currentTranspose - 1));
                     } else if (midiPlayer) {
                         int currentTranspose = midiPlayer->getUserKeyTranspose();
                         midiPlayer->setUserKeyTranspose(qMax(-6, currentTranspose - 1));
+                        if (mldFmPlayer) mldFmPlayer->setTranspose(midiPlayer->getUserKeyTranspose());
                     }
                     updateTimeDisplay();
                     return true;
@@ -1953,9 +2076,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     } else if (playOkaViaOpl && okaPlayer) {
                         int currentTranspose = okaPlayer->getUserKeyTranspose();
                         okaPlayer->setUserKeyTranspose(qMin(6, currentTranspose + 1));
+                    } else if (isMdx && mdxPlayer) {
+                        int currentTranspose = mdxPlayer->getUserKeyTranspose();
+                        mdxPlayer->setUserKeyTranspose(qMin(6, currentTranspose + 1));
                     } else if (midiPlayer) {
                         int currentTranspose = midiPlayer->getUserKeyTranspose();
                         midiPlayer->setUserKeyTranspose(qMin(6, currentTranspose + 1));
+                        if (mldFmPlayer) mldFmPlayer->setTranspose(midiPlayer->getUserKeyTranspose());
                     }
                     updateTimeDisplay();
                     return true;
@@ -1970,9 +2097,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     } else if (playOkaViaOpl && okaPlayer) {
                         okaPlayer->setUserTempoScale(100);
                         okaPlayer->setUserKeyTranspose(0);
+                    } else if (isMdx && mdxPlayer) {
+                        mdxPlayer->setUserTempoScale(100);
+                        mdxPlayer->setUserKeyTranspose(0);
                     } else if (midiPlayer) {
                         midiPlayer->setUserTempoScale(100);
                         midiPlayer->setUserKeyTranspose(0);
+                        if (mldFmPlayer) { mldFmPlayer->setTempoScale(100); mldFmPlayer->setTranspose(0); }
                     }
                     updateTimeDisplay();
                     return true;
@@ -1999,7 +2130,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "🎵 JJoMe MIDI Player v3.0.0 beta";
+    QString title = "🎵 JJoMe MIDI Player v3.1.1";
     
     if (currentNode) {
         if (currentNode->isFolder) {
@@ -2022,8 +2153,13 @@ void MainWindow::toggleDsp()
 
     bool gybActive = !targetFile.isEmpty() && isGybFile(targetFile);
     bool okaOplActive = !targetFile.isEmpty() && isOkaFile(targetFile);
+    bool mdxActive = !targetFile.isEmpty() && isMdxFile(targetFile);
+    bool vgmActive = !targetFile.isEmpty() && isVgmFile(targetFile);
     int currentLevel = gybActive ? gybPlayer->getDspLevel()
-                                 : (okaOplActive ? okaPlayer->getDspLevel() : imsPlayer->getDspLevel());
+                                 : (okaOplActive ? okaPlayer->getDspLevel()
+                                 : (mdxActive ? mdxPlayer->getDspLevel()
+                                 : (vgmActive ? vgmPlayer->getDspLevel()
+                                              : imsPlayer->getDspLevel())));
     int nextLevel;
     if (currentLevel == 0) nextLevel = 1;
     else if (currentLevel == 3) nextLevel = 0;
@@ -2032,6 +2168,8 @@ void MainWindow::toggleDsp()
     imsPlayer->setDspLevel(nextLevel);
     gybPlayer->setDspLevel(nextLevel);
     okaPlayer->setDspLevel(nextLevel);
+    mdxPlayer->setDspLevel(nextLevel);
+    vgmPlayer->setDspLevel(nextLevel);
     updateDspButtonStyle();
 }
 
@@ -2086,8 +2224,13 @@ void MainWindow::updateDspButtonStyle()
 
     bool gybActive = !targetFile.isEmpty() && isGybFile(targetFile);
     bool okaOplActive = !targetFile.isEmpty() && isOkaFile(targetFile);
+    bool mdxActive = !targetFile.isEmpty() && isMdxFile(targetFile);
+    bool vgmActive = !targetFile.isEmpty() && isVgmFile(targetFile);
     int level = gybActive ? gybPlayer->getDspLevel()
-                          : (okaOplActive ? okaPlayer->getDspLevel() : imsPlayer->getDspLevel());
+                          : (okaOplActive ? okaPlayer->getDspLevel()
+                          : (mdxActive ? mdxPlayer->getDspLevel()
+                          : (vgmActive ? vgmPlayer->getDspLevel()
+                                       : imsPlayer->getDspLevel())));
     QString text = "DSP";
     QString style;
     
@@ -2196,6 +2339,14 @@ void MainWindow::refreshOplChannelMonitor()
         channelMonitor->setImsMode(true, okaPlayer->getBankName(),
                                    okaPlayer->getInstruments(), "OKA");
         channelMonitor->updateVoiceInstrumentNames(okaPlayer->getVoiceInstrumentNames());
+    } else if (isMdxFile(currentFile)) {
+        channelMonitor->setImsMode(true, mdxPlayer->getBankName(),
+                                   mdxPlayer->getInstruments(), "MDX");
+        channelMonitor->updateVoiceInstrumentNames(mdxPlayer->getVoiceInstrumentNames());
+    } else if (isVgmFile(currentFile)) {
+        channelMonitor->setImsMode(true, vgmPlayer->getBankName(),
+                                   vgmPlayer->getInstruments(), "VGM");
+        channelMonitor->updateVoiceInstrumentNames(vgmPlayer->getVoiceInstrumentNames());
     } else if (isOplFile(currentFile)) {
         channelMonitor->setImsMode(true, imsPlayer->getBankName(),
                                    imsPlayer->getInstruments(),
@@ -2390,6 +2541,11 @@ void MainWindow::showHelpDialog()
     QMessageBox helpBox(this);
     helpBox.setIcon(QMessageBox::Information);
 
+    // Built from the one list the scanner and the open dialog use. This was a
+    // hand-written copy and had fallen seven extensions behind (2026-09-28).
+    const QString supportedList =
+        (FolderScanner::playableFilters() + QStringList{QStringLiteral("*.zip")}).join(QStringLiteral(", "));
+
 #ifdef ENGLISH_UI
     helpBox.setWindowTitle(QString::fromUtf8("Keyboard Shortcuts & Features"));
 
@@ -2418,8 +2574,8 @@ void MainWindow::showHelpDialog()
         "</table>"
         "<br/>"
         "<b>[Supported music file extensions]</b><br/>"
-        "&#8226; <b>*.mid, *.midi, *.nob, *.ims, *.rol, *.sop, *.gyb, *.oka, *.okm, *.vgm, *.vgz</b><br/>"
     );
+    helpText += QStringLiteral("&#8226; <b>") + supportedList + QStringLiteral("</b><br/>");
     // Which of the two storage locations is live is otherwise invisible, and not
     // knowing is itself a source of confusion once portable mode exists.
     helpText += QString(
@@ -2458,8 +2614,8 @@ void MainWindow::showHelpDialog()
         "</table>"
         "<br/>"
         "<b>[지원 음악 파일 확장자]</b><br/>"
-        "• <b>*.mid, *.midi, *.nob, *.ims, *.rol, *.sop, *.gyb, *.oka, *.okm, *.vgm, *.vgz</b><br/>"
     );
+    helpText += QStringLiteral("&#8226; <b>") + supportedList + QStringLiteral("</b><br/>");
     helpText += QString::fromUtf8(
         "<br/><b>[설정 파일 위치]</b><br/>"
         "• <b>%1</b>%2<br/>"

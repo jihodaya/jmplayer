@@ -132,6 +132,7 @@ public:
     void pause();
     void stop();
     bool isPlaying() const;
+    bool isPaused() const { return paused.load(std::memory_order_relaxed); }
 
     void setVolume(int volume); // 0-127
     int getVolume() const;
@@ -172,6 +173,11 @@ public:
     QList<MarkerEvent> extractMarkerTimings(int channel = 11) const; // 기본값 11번 채널
 
     // Real-time key/tempo controls
+    // True once if loadMidiFile already told the user why it failed, so the
+    // caller does not stack a generic box on top of a specific one.
+    bool takeReportedError() { const bool r = m_reportedError; m_reportedError = false; return r; }
+    bool m_reportedError = false;   // loadMidiFile already showed a message
+
     void setUserKeyTranspose(int key);
     int getUserKeyTranspose() const;
     void setUserTempoScale(int scale);
@@ -180,6 +186,10 @@ public:
 
 signals:
     void positionChanged(unsigned long position);
+    // Emitted once per seek with the song position it landed on, whether
+    // playing or paused. The MLD FM half follows it; the six transport paths
+    // that seek all end in performSeekImmediate(), so this is the one place.
+    void seeked(unsigned long positionMs);
     void finished();
     void errorOccurred(const QString &error);
 
@@ -190,6 +200,10 @@ signals:
     void programChange(int channel, int program);
     void soundModeDetected(int mode); // 0=GM, 1=MT-32, 2=GS, 3=XG
     void soundModeReliabilityChanged(const SoundModeReliability& reliability);
+
+    // A song's opening SysEx is being handed to an external module. Only ever
+    // emitted for a burst big enough to be a visible wait - see processEvents().
+    void sysExTransfer(bool active, int kbSent);
 
 private slots:
     void processEvents();
@@ -203,6 +217,7 @@ private:
     void sendMidiMessage(unsigned char status, unsigned char data1, unsigned char data2);
     void sendMidiMessage(DWORD message);
     void sendSysExMessage(const std::vector<unsigned char> &data);
+    void applyGsRhythmSysEx(const std::vector<unsigned char> &data);
     void initializeChannelState();
     void updateChannelState(unsigned char status, unsigned char data1, unsigned char data2);
     void sendCurrentChannelState();
@@ -222,20 +237,36 @@ private:
 
     HMIDIOUT hMidiOut;
     HANDLE m_sysExEvent;
-    bool connected;
-    bool playing;
-    bool paused;
+    // ATOMIC so the GUI can read them WITHOUT taking stateMutex.
+    //
+    // processEvents() holds stateMutex for as long as it takes to hand every
+    // due event to the device, and sendSysExMessage() BLOCKS until the driver
+    // has transmitted. The Prince of Persia MT-32 set puts 20,154 bytes of
+    // timbre upload on tick 0 - 6.45 s on a 31250-baud link - and the whole
+    // window froze for that time, because the position/time/BPM display calls
+    // isPlaying(), getCurrentPosition() and getCurrentBpm() every tick and all
+    // three used to wait on the same mutex. Reported as "it lags about five
+    // seconds"; only external devices can show it, since munt and the internal
+    // synth take a function call rather than a wire.
+    //
+    // Nothing here is read as a *group*, so a torn pair (position sampled either
+    // side of a state change) is at worst one stale frame on a display. The
+    // mutex still guards everything with structure - tracks, the event lists,
+    // the device handles.
+    std::atomic<bool> connected;
+    std::atomic<bool> playing;
+    std::atomic<bool> paused;
 
     QString currentFile;
     std::vector<MidiTrack> tracks;
     unsigned long ticksPerQuarter;
-    unsigned long currentTempo; // microseconds per quarter note
+    std::atomic<unsigned long> currentTempo; // microseconds per quarter note
     unsigned long startTime;
-    qint64 pausedTime;
+    std::atomic<qint64> pausedTime;
 
     // Real-time based playback variables
-    qint64 playbackStartTime;  // Real time when playback started (ms)
-    unsigned long currentTick;             // Current playback position in ticks
+    std::atomic<qint64> playbackStartTime;  // Real time when playback started (ms)
+    std::atomic<unsigned long> currentTick;  // Current playback position in ticks
     std::vector<std::pair<unsigned long, unsigned long>> allEvents; // tick, eventIndex pairs
     unsigned long globalEventIndex;       // Current event index in sorted event list
 
@@ -275,6 +306,56 @@ private:
     };
     ChannelState currentChannelState[16];
 
+    // The whole controller map, per channel, so a seek can put the module back
+    // exactly as the song left it. The six fields above cover CC1, 7, 11 and 64
+    // and nothing else - not bank select, not pan, not reverb or chorus, not
+    // the RPN/NRPN parameters - so seeking used to land on a channel whose
+    // instrument was chosen from the wrong bank. 0xFF means "the song never
+    // touched this one", and those are left alone rather than forced to a
+    // default that might not be the module's.
+    // How far through the song the SysEx have actually been handed to the
+    // module. A seek only has to replay the ones beyond it - see the note in
+    // performSeekImmediate.
+    unsigned long m_sysExSentThroughTick = 0;
+    // Bytes of SysEx handed over since the last ordinary MIDI event. A module
+    // needs time to ACT on a bulk dump, not just to receive it - see the settle
+    // in processEvents().
+    qint64 m_sysExBurstBytes = 0;
+    // Set once the song has played past tick 0. After that, a SysEx AT tick 0
+    // can only be a re-visit - see processEvents().
+    bool m_startupSysExDone = false;
+    bool m_sysExTransferAnnounced = false;
+    // How much slower than a MIDI cable to hand SysEx over, in percent of the
+    // wire time. 100 = exactly cable speed. Settings key `Midi/SysExPacePct`;
+    // see sendSysExMessage() for why a receiver may need more than 100.
+    int m_sysExPacePct = 100;
+
+public:
+    void setSysExPacePct(int pct) { m_sysExPacePct = qBound(100, pct, 400); }
+private:
+
+    unsigned char m_ccState[16][128];
+    // Which RPN / NRPN address is selected RIGHT NOW, so a data entry can be
+    // filed against the right parameter. Only one of the two is ever live -
+    // selecting an RPN deselects any NRPN and vice versa - which is the
+    // hardware's own behaviour.
+    int m_lastNrpn[16];     // (msb << 7) | lsb, or -1
+    int m_lastRpn[16];
+
+    // EVERY parameter the song has written, per channel, keyed by address.
+    //
+    // Keeping only the last one was a real defect: 6PONGI4 writes 6 to 20
+    // parameters on every channel - vibrato rate/depth/delay, TVF cutoff and
+    // resonance, envelope attack/decay/release, and 20 drum-note settings on
+    // channel 10 - and a seek restored exactly one of them, with whatever value
+    // CC6 happened to be holding. The channel came back with a different
+    // timbre, which is what "seeking changes the instrument" turned out to be.
+    // Invisible on the internal SoundFont, which ignores NRPN entirely.
+    //
+    // Value is (dataMSB << 8) | dataLSB, with 0x100 meaning "MSB only".
+    QMap<int, int> m_nrpnValues[16];
+    QMap<int, int> m_rpnValues[16];
+
     // NOB file support
     QTemporaryFile *currentTempFile = nullptr;  // Temporary MIDI file for NOB
     bool isNobFile = false;  // NOB 파일 여부 플래그
@@ -299,8 +380,10 @@ private:
     MidiReset m_midiReset;
     QString m_currentSoundFontPath;
 
-    int m_userKeyTranspose;
-    int m_userTempoScale;
+    // Atomic for the same reason as the block above - the tempo/key readout
+    // asks for these on the GUI thread every tick.
+    std::atomic<int> m_userKeyTranspose;
+    std::atomic<int> m_userTempoScale;
     int m_transposedNotes[16][128];
 };
 

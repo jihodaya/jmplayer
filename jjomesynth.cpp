@@ -1,4 +1,7 @@
 #include "jjomesynth.h"
+#include "mldfmplayer.h"
+#include "mdxplayer.h"
+#include "vgmplayer.h"
 #include <QDebug>
 #include <QMutexLocker>
 #include <QFileInfo>
@@ -127,6 +130,7 @@ bool JJoMeSynth::initialize(const QString& soundFontPath) {
     deviceConfig.playback.format   = ma_format_f32;
     deviceConfig.playback.channels = 2;
     deviceConfig.sampleRate        = 49716;
+    m_deviceSampleRate             = int(deviceConfig.sampleRate);
     deviceConfig.dataCallback      = audio_data_callback;
     deviceConfig.pUserData         = this;
 
@@ -207,6 +211,18 @@ void JJoMeSynth::shutdown() {
     qDebug() << "JJoMe Synth shutdown completed.";
 }
 
+void JJoMeSynth::setVgmPlayer(VgmPlayer* player) {
+    m_vgmPlayer.store(player, std::memory_order_release);
+}
+
+void JJoMeSynth::setMldFmPlayer(MldFmPlayer* player) {
+    m_mldFmPlayer.store(player, std::memory_order_release);
+}
+
+void JJoMeSynth::setMdxPlayer(MdxPlayer* player) {
+    m_mdxPlayer.store(player, std::memory_order_release);
+}
+
 void JJoMeSynth::setImsPlayer(ImsPlayer* player) {
     m_imsPlayer.store(player, std::memory_order_release);
 }
@@ -252,8 +268,25 @@ void JJoMeSynth::processEvents() {
                     tsf_channel_midi_control(m_tsf, ev.channel, ev.param1, ev.param2);
                     break;
                 case SynthEvent::ProgramChange:
-                    tsf_channel_set_presetnumber(m_tsf, ev.channel, ev.param1, (ev.channel == 9));
+                    m_lastProgram[ev.channel & 15] = ev.param1;
+                    tsf_channel_set_presetnumber(m_tsf, ev.channel, ev.param1,
+                                                 isDrumChannel(ev.channel));
                     break;
+                case SynthEvent::SetDrumChannel: {
+                    const int ch = ev.channel & 15;
+                    const uint16_t bit = (uint16_t)(1u << ch);
+                    const uint16_t was = m_drumChannels;
+                    m_drumChannels = ev.param1 ? (uint16_t)(was | bit)
+                                               : (uint16_t)(was & ~bit);
+                    // TSF only picks a bank when the program is set, so the
+                    // channel has to be told again or the change does nothing
+                    // until the song happens to send its next program change.
+                    if (m_drumChannels != was) {
+                        tsf_channel_set_presetnumber(m_tsf, ch, m_lastProgram[ch],
+                                                     isDrumChannel(ch));
+                    }
+                    break;
+                }
                 case SynthEvent::SetVolume:
                     // Apply a slight attenuation factor (0.8x) to MIDI gain 
                     // to balance it with IMS/ROL (AdPlug) playback levels.
@@ -275,6 +308,9 @@ void JJoMeSynth::renderAudio(void* output, unsigned int frameCount) {
     GybPlayer* gyb = m_gybPlayer.load(std::memory_order_acquire);
     ImsPlayer* ims = m_imsPlayer.load(std::memory_order_acquire);
     OkaPlayer* oka = m_okaPlayer.load(std::memory_order_acquire);
+    VgmPlayer* vgm = m_vgmPlayer.load(std::memory_order_acquire);
+    MdxPlayer* mdx = m_mdxPlayer.load(std::memory_order_acquire);
+    MldFmPlayer* mldfm = m_mldFmPlayer.load(std::memory_order_acquire);
     Mt32Synth* mt32 = m_mt32Synth.load(std::memory_order_acquire);
     tsf* soundfont = m_tsf; // Assuming m_tsf is only changed during shutdown/init
 
@@ -294,7 +330,23 @@ void JJoMeSynth::renderAudio(void* output, unsigned int frameCount) {
     // Putting the MT-32 first, as this did when it was added, silences every
     // OPL song for anyone who has the MT-32 selected (reported 2026-08-21).
     // stop() clears the OPL pointers, so nothing lingers to block it afterwards.
-    if (gyb) {
+    // MDX is a source in the same sense as the OPL players: it renders its own
+    // audio and never goes near the MIDI path, so it belongs in this chain and
+    // not behind whichever MIDI device happens to be selected.
+    // VGM is a source in the same sense, and its chips are its own.
+    if (vgm) {
+        // Both of these mix into the buffer rather than overwrite it, so it has
+        // to start at silence - the device does not promise a clean one.
+        memset(output, 0, frameCount * 2 * sizeof(float));
+        if (vgm->isPlaying()) {
+            vgm->renderAudio(static_cast<float*>(output), frameCount);
+        }
+    } else if (mdx) {
+        memset(output, 0, frameCount * 2 * sizeof(float));
+        if (mdx->isPlaying()) {
+            mdx->renderAudio(static_cast<float*>(output), frameCount);
+        }
+    } else if (gyb) {
         bool playing = gyb->isPlaying();
         if (playing) {
             gyb->renderAudio(static_cast<float*>(output), frameCount);
@@ -329,6 +381,27 @@ void JJoMeSynth::renderAudio(void* output, unsigned int frameCount) {
         tsf_render_float(soundfont, fOutput, frameCount, 0);
     } else {
         memset(output, 0, frameCount * 2 * sizeof(float));
+    }
+
+    // The MLD FM half goes in AFTER the chain above rather than inside it,
+    // because it is not an alternative to anything: twelve of these songs send
+    // some tracks to the OPM and the rest to a MIDI module, and the arranger
+    // meant both to sound at once - the titles say "For SC55+X680x0" and
+    // "SC-55+OPM+ADPCM". Whatever produced the buffer - the SoundFont, the
+    // MT-32, or silence because the MIDI half is going out of a real port -
+    // the FM mixes on top of it.
+    //
+    // The balance attenuates rather than boosts, so it can only take one side
+    // away. Pushing it up instead would clip whichever half is already loud,
+    // and which one that is varies by song: over three of them the natural FM
+    // to MIDI ratio measures -11.2, -2.2 and +5.1 dB.
+    if (mldfm && mldfm->isPlaying()) {
+        const float mg = mldfm->midiGain();
+        if (mg < 0.999f) {
+            float* f = static_cast<float*>(output);
+            for (unsigned int i = 0; i < frameCount * 2; ++i) f[i] *= mg;
+        }
+        mldfm->renderAudio(static_cast<float*>(output), frameCount);
     }
 
     // Recording: copy PCM data to lock-free ring buffer (NO disk I/O here)
@@ -385,6 +458,27 @@ void JJoMeSynth::controlChange(int channel, int control, int value) {
     pushEvent({SynthEvent::ControlChange, channel, control, value, 0.0f});
 }
 
+int JJoMeSynth::debugChannelPreset(int channel) const {
+    return m_tsf ? tsf_channel_get_preset_number(m_tsf, channel) : -1;
+}
+
+int JJoMeSynth::debugChannelBank(int channel) const {
+    return m_tsf ? tsf_channel_get_preset_bank(m_tsf, channel) : -1;
+}
+
+void JJoMeSynth::debugDrainEvents() {
+    processEvents();
+}
+
+void JJoMeSynth::setDrumChannel(int channel, bool isDrum) {
+    if (channel < 0 || channel > 15) return;
+    pushEvent({SynthEvent::SetDrumChannel, channel, isDrum ? 1 : 0, 0, 0.0f});
+}
+
+void JJoMeSynth::resetDrumChannels() {
+    for (int ch = 0; ch < 16; ++ch) setDrumChannel(ch, ch == 9);
+}
+
 void JJoMeSynth::programChange(int channel, int program) {
     pushEvent({SynthEvent::ProgramChange, channel, program, 0, 0.0f});
 }
@@ -426,8 +520,12 @@ bool JJoMeSynth::startRecording(const QString& wavFilePath) {
     return true;
 }
 
-void JJoMeSynth::stopRecording() {
-    if (!m_isRecording.load(std::memory_order_relaxed)) return;
+QString JJoMeSynth::recordingPath() const {
+    return m_writtenWavPath;
+}
+
+QString JJoMeSynth::stopRecording() {
+    if (!m_isRecording.load(std::memory_order_relaxed)) return QString();
 
     // Signal the writer thread to stop and wait for it
     m_isRecording.store(false, std::memory_order_release);
@@ -440,8 +538,11 @@ void JJoMeSynth::stopRecording() {
     flushRemainingPcm();
 
     // Clean up encoder. If it was never created (armed but nothing played),
-    // no WAV file exists — exactly the desired behavior.
+    // no WAV file exists — exactly the desired behavior, but the caller has to
+    // be told, or a recording that captured nothing looks exactly like one that
+    // worked.
     QMutexLocker locker(&m_encoderMutex);
+    const QString written = m_encoder ? m_writtenWavPath : QString();
     m_pendingWavPath.clear();
     if (m_encoder) {
         ma_encoder_uninit(m_encoder);
@@ -454,6 +555,8 @@ void JJoMeSynth::stopRecording() {
     m_pcmRing = nullptr;
     m_pcmWritePos.store(0, std::memory_order_relaxed);
     m_pcmReadPos.store(0, std::memory_order_relaxed);
+    m_writtenWavPath.clear();
+    return written;
 }
 
 void JJoMeSynth::recWriterLoop() {
@@ -499,6 +602,7 @@ void JJoMeSynth::recWriterLoop() {
             if (ma_encoder_init_file_w(m_pendingWavPath.toStdWString().c_str(),
                                        &config, enc) == MA_SUCCESS) {
                 m_encoder = enc;
+                m_writtenWavPath = m_pendingWavPath;
             } else {
                 delete enc;
                 qDebug() << "[JJoMeSynth] Failed to create WAV file:" << m_pendingWavPath;
@@ -557,6 +661,17 @@ void JJoMeSynth::setOplStereoMode(int mode) {
     // policy to the ORIGINAL 0xC0 values jmp ships - tell it which of jmp's
     // virtual-stereo patterns to use so the Pi mix follows this setting.
     OplTunnelSender::instance().setStereoMode(mode);
+
+    // MDX gets it too. Its chip has real stereo and its songs use it, so the
+    // engine applies the pattern only to channels the song left centred.
+    if (MdxPlayer* mdx = m_mdxPlayer.load(std::memory_order_acquire)) {
+        mdx->setStereoMode(mode);
+    }
+    // Same for VGM: the YM2612, YM2151, PSG and Game Boy all place their own
+    // channels, so the pattern only fills in the ones the file left centred.
+    if (VgmPlayer* vgm = m_vgmPlayer.load(std::memory_order_acquire)) {
+        vgm->setStereoMode(mode);
+    }
 
     // 'L' -> 0x20 and 'R' -> 0x10 is the mirror of the chip's own bits
     // (nukedopl.c: 0x10 is `cha`, and `cha` is mixed into the LEFT output), so a

@@ -3,6 +3,7 @@
 
 #include <QElapsedTimer>
 #include <QThread>
+#include <QFileInfo>
 #include <QString>
 #include <QStringList>
 #include <QDir>
@@ -26,6 +27,17 @@ public:
     // The extensions this scanner picks up. Shared with the counting pass so
     // the denominator cannot drift from what is actually added.
     static const QStringList& playableFilters();
+
+    // The same list as a question about one file: `suffix` without the dot,
+    // any case. .zip is not in it - a zip is a container, handled separately.
+    static bool isPlayableSuffix(const QString& suffix);
+
+    // The file-open dialog's filter string, built from the same list plus .zip.
+    static QString openDialogFilter();
+
+    // The playlist row for one song - filename plus whatever title its format
+    // carries. Shared with the playlist Refresh so the two cannot drift.
+    static QString displayNameFor(const QFileInfo& fileInfo);
 
 signals:
     void scanFinished(FolderScanner* scanner);
@@ -54,7 +66,8 @@ private:
     void reportProgress(bool force);
 
     void addFolderStructureToNode(PlaylistTreeNode* parentNode, const QString& folderPath);
-    bool isOplFile(const QString& filePath);
+    // A pure extension test, so displayNameFor() can use it too.
+    static bool isOplFile(const QString& filePath);
 };
 
 #endif // FOLDERSCANNER_H

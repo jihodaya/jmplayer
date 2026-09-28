@@ -1,6 +1,8 @@
 // Split from mainwindow.cpp (lyrics-sync domain) - implementation-only
 // file split, identical behavior. Same pattern as lyricswindow_editor.cpp.
 #include "mainwindow.h"
+#include "mdxplayer.h"
+#include "vgmplayer.h"
 #include "uistrings.h"
 #include "folderscanner.h"
 #include "pianorollwindow.h"
@@ -227,6 +229,8 @@ bool MainWindow::updateLyricsWindowContent(const QString& filePath, bool isNobFi
         if (isGybFile(filePath))                        cleanTitle = GybFileHandler::extractTitle(filePath);
         else if (filePath.toLower().endsWith(".nob"))   cleanTitle = NobFileHandler::extractTitle(filePath);
         else if (OkaFileHandler::isOkaFile(filePath))   cleanTitle = OkaFileHandler::extractTitle(filePath);
+        else if (isVgmFile(filePath))                   cleanTitle = VgmPlayer::extractTitleQuick(filePath);
+        else if (isMdxFile(filePath))                   cleanTitle = MdxPlayer::extractTitleQuick(filePath);
         else if (isOplFile(filePath))                   cleanTitle = ImsPlayer::extractTitleQuick(filePath);
         if (cleanTitle.trimmed().isEmpty())
             cleanTitle = QFileInfo(filePath).completeBaseName();
@@ -637,6 +641,18 @@ bool MainWindow::updateLyricsWindowContent(const QString& filePath, bool isNobFi
         } else {
             qDebug() << "[MainWindow]" << context << ": No ISS file found for" << filePath;
         }
+    } else if (isMdxFile(filePath) || isVgmFile(filePath)) {
+        // Played by their own engines, so midiPlayer still holds whatever song
+        // came BEFORE - and asking it for lyrics here showed that song's text
+        // under this one's name. Reported 2026-09-14: DK_03.MDX with the
+        // previous .mdz's "ACTRAISER ... MiX for FM+SC55" in its lyrics window.
+        // Neither format carries lyrics; the window is cleared.
+        currentNobFilePath.clear();
+        currentMarkerEvents.clear();
+        currentLyricMarkerTicks.clear();
+        resetLyricSyncState();
+        lyricsWindow->setNobFile(false);
+        lyricsWindow->setCurrentFilePath(QString());
     } else {
         currentNobFilePath.clear();
         currentMarkerEvents.clear();

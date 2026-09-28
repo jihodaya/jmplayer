@@ -14,7 +14,7 @@
 // launched first.)
 //
 // **Nuked-SC55 is not distributed with jmp.** Its licence forbids commercial
-// redistribution, and adopting it would end jmp's public-domain status. The
+// redistribution, and shipping it would put terms on jmp that its MIT licence does not have. The
 // user drops their own copy into the folder below; jmp only looks for it.
 // ROM files are the user's too - they are Roland's.
 //

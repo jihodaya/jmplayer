@@ -21,7 +21,7 @@ set RELEASE_DIR=%SCRIPT_DIR%release
 
 echo.
 echo ========================================
-echo JJoMe MIDI Player V3.0.0 beta
+echo JJoMe MIDI Player V3.1.1
 echo License-Compliant Build Script
 echo ========================================
 echo.
@@ -147,11 +147,13 @@ if exist "%SRC_DIR%\IMS\STANDARD.BNK" (
 )
 
 echo [5/5] Creating directory structure for release...
-copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe"
+copy "%BUILD_DIR%\MidiPlayer.exe" "%RELEASE_DIR%\JMPlayer_V3.1.1.exe"
 copy "%SRC_DIR%\K_icon.ico" "%RELEASE_DIR%\K_icon.ico"
 if exist "%SRC_DIR%\SoundFonts" xcopy "%SRC_DIR%\SoundFonts" "%RELEASE_DIR%\SoundFonts" /E /I /Y
 if exist "%SRC_DIR%\BK" xcopy "%SRC_DIR%\BK" "%RELEASE_DIR%\BK" /E /I /Y
 if exist "%SRC_DIR%\etc\LICENSES.md" copy "%SRC_DIR%\etc\LICENSES.md" "%RELEASE_DIR%\LICENSES.md"
+REM jmp is MIT-licensed, and MIT asks for its notice to travel with the binary.
+if exist "%SRC_DIR%\LICENSE" copy "%SRC_DIR%\LICENSE" "%RELEASE_DIR%\LICENSE.txt" > nul
 REM PDF manuals. The previous line here named a file called ".pdf" - the Korean
 REM part of the filename had been lost somewhere - so the manual never actually
 REM reached a release. ASCII names now, for the same reason kernel images use
@@ -160,7 +162,7 @@ if exist "%SRC_DIR%\etc\JMPlayer_Manual_KO.pdf" copy "%SRC_DIR%\etc\JMPlayer_Man
 if exist "%SRC_DIR%\etc\JMPlayer_Manual_EN.pdf" copy "%SRC_DIR%\etc\JMPlayer_Manual_EN.pdf" "%RELEASE_DIR%\" > nul
 
 REM libmt32emu, the MT-32 engine. Unlike Nuked-SC55 this one DOES ship: it is
-REM LGPL-2.1, so a public-domain program may link it dynamically and pass it on.
+REM LGPL-2.1, so an MIT-licensed program may link it dynamically and pass it on.
 REM Only the ROMs are missing, and those are Roland's.
 for %%D in (libmt32emu-2.dll libmt32emu.dll) do (
     if exist "%BUILD_DIR%\_deps\munt-build\%%D" copy "%BUILD_DIR%\_deps\munt-build\%%D" "%RELEASE_DIR%\\" > nul
@@ -175,8 +177,8 @@ REM NukedSC55\README.txt next to it has always been ASCII and has always been
 REM fine. Keep every literal in these scripts ASCII.
 copy "%SCRIPT_DIR%\MT32ROMs_README.txt" "%RELEASE_DIR%\MT32ROMs\README.txt" > nul
 
-REM Nuked-SC55 drop folder. The emulator itself is NOT shipped - it is not
-REM public domain and jmp is - so only the folder and its note go out.
+REM Nuked-SC55 drop folder. The emulator itself is NOT shipped - its licence
+REM forbids redistribution - so only the folder and its note go out.
 if not exist "%RELEASE_DIR%\NukedSC55" mkdir "%RELEASE_DIR%\NukedSC55"
 copy "%SCRIPT_DIR%\NukedSC55_README.txt" "%RELEASE_DIR%\NukedSC55\README.txt"
 if exist "%SCRIPT_DIR%\emulator-patch" xcopy "%SCRIPT_DIR%\emulator-patch" "%RELEASE_DIR%\emulator-patch" /E /I /Y
@@ -193,7 +195,7 @@ echo.
 REM Deploy Qt dependencies
 echo [5/5] Deploying Qt6 dependencies...
 cd /d "%RELEASE_DIR%"
-windeployqt JMPlayer_V3.0.0-beta.exe --release --no-translations --no-opengl-sw
+windeployqt JMPlayer_V3.1.1.exe --release --no-translations --no-opengl-sw
 
 if errorlevel 1 (
     echo.
@@ -210,11 +212,11 @@ echo BUILD COMPLETED SUCCESSFULLY!
 echo ========================================
 echo.
 echo Release folder: %RELEASE_DIR%\
-echo Executable: %RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe
+echo Executable: %RELEASE_DIR%\JMPlayer_V3.1.1.exe
 echo.
 
-if exist "%RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe" (
-    for %%A in ("%RELEASE_DIR%\JMPlayer_V3.0.0-beta.exe") do (
+if exist "%RELEASE_DIR%\JMPlayer_V3.1.1.exe" (
+    for %%A in ("%RELEASE_DIR%\JMPlayer_V3.1.1.exe") do (
         echo Executable size: %%~zA bytes
     )
 )

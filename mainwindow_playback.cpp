@@ -1,6 +1,9 @@
 // Split from mainwindow.cpp (playback/transport domain) - implementation-only
 // file split, identical behavior. Same pattern as lyricswindow_editor.cpp.
 #include "mainwindow.h"
+#include "mdxmidi.h"
+#include "mldfmplayer.h"
+#include "sngmidi.h"
 #include "uistrings.h"
 #include "folderscanner.h"
 #include "pianorollwindow.h"
@@ -18,6 +21,9 @@
 #include "mt32synth.h"
 #include "gybokamidi.h"
 #include "okaplayer.h"
+#include "mdxplayer.h"
+#include "vgmplayer.h"
+#include "rcpfilehandler.h"
 #include "okabackend.h"
 #include "soundfontmanagerdialog.h"
 #include "imsplayer.h"
@@ -103,6 +109,8 @@ void MainWindow::playPause()
         imsPlayer->pause();
         gybPlayer->pause();
         okaPlayer->pause();
+        mdxPlayer->pause();
+        vgmPlayer->pause();
         setPlaying(false);
         m_pausedByUser = true;   // Play-button pause is resumable by Space too
         positionTimer->stop();
@@ -124,6 +132,8 @@ void MainWindow::playPause()
             bool isGybFile = this->isGybFile(filePath);
             bool isNobFile = filePath.toLower().endsWith(".nob");
             bool isOka = isOkaFile(filePath);
+            const bool isMdx = isMdxFile(filePath);
+            const bool isVgm = isVgmFile(filePath);
             bool playOkaViaOpl = isOkaOplFile(filePath);
 
             qDebug() << "[MainWindow] Attempting to play:" << filePath << "isGybFile:" << isGybFile << "isImsFile:" << isImsFile << "isNobFile:" << isNobFile << "isOka:" << isOka << "playOkaViaOpl:" << playOkaViaOpl;
@@ -166,9 +176,18 @@ void MainWindow::playPause()
                     }
                     loaded = okaPlayer->loadFile(filePath);
                     if (!loaded) qWarning() << "[MainWindow] Failed to load OKA file via OPL:" << filePath;
+                } else if (isMdx) {
+                    qDebug() << "[MainWindow] Loading MDX file:" << filePath;
+                    loaded = mdxPlayer->loadFile(filePath);
+                    if (!loaded) qWarning() << "[MainWindow] Failed to load MDX:" << filePath;
+                } else if (isVgm) {
+                    qDebug() << "[MainWindow] Loading VGM file:" << filePath;
+                    loaded = vgmPlayer->loadFile(filePath);
+                    if (!loaded) qWarning() << "[MainWindow] Failed to load VGM:" << filePath;
                 } else {
                     qDebug() << "[MainWindow] Loading MIDI file:" << filePath;
                     loaded = midiPlayer->loadMidiFile(filePath);
+                    if (loaded) setupMldFmHalf(filePath);
                     midiPlayer->setIsNobFile(isNobFile || isOka);
                 }
 
@@ -183,7 +202,26 @@ void MainWindow::playPause()
                     progressSlider->setValue(0);
                     positionLabel->setText("0%");
                 } else {
-                    QMessageBox::warning(this, "MIDI Player", "Failed to load file!");
+                    // The player emits its own message when it knows why - an
+                    // unsupported format, say - and a second generic box on top
+                    // of it just makes the user click twice.
+                    if (!midiPlayer->takeReportedError()) {
+                        // A VGM naming only chips this build has no emulator
+                        // for is refused rather than played as silence, and
+                        // "failed to load" says nothing a user can act on.
+                        // Name the chip instead.
+                        const QString lower = filePath.toLower();
+                        QString chips;
+                        if (lower.endsWith(".vgm") || lower.endsWith(".vgz"))
+                            chips = VgmPlayer::describeChips(filePath);
+                        if (!chips.isEmpty()) {
+                            QMessageBox::warning(this, "MIDI Player",
+                                LSTR("이 VGM이 요구하는 음원 칩을 아직 재생할 수 없습니다.\n\n필요한 칩: %1",
+                                     "This VGM needs a sound chip this build cannot play yet.\n\nChips: %1").arg(chips));
+                        } else {
+                            QMessageBox::warning(this, "MIDI Player", "Failed to load file!");
+                        }
+                    }
                     qWarning() << "[MainWindow] File loading failed";
                     return;
                 }
@@ -210,8 +248,12 @@ void MainWindow::playPause()
                         imsPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
                     } else if (playOkaViaOpl) {
                         okaPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+                    } else if (isMdx) {
+                        mdxPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+                    } else if (isVgm) {
+                        vgmPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
                     } else {
-                        midiPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+                        midiPlayer->stop(); if (mldFmPlayer) mldFmPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
                     }
                     progressSlider->setValue(0);
                     positionLabel->setText("0%");
@@ -226,6 +268,8 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setGybPlayer(gybPlayer);
                 JJoMeSynth::instance().setImsPlayer(nullptr);
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
                 gybPlayer->play();
                 qDebug() << "[MainWindow] GYB play() called";
                 dspButton->show(); bankButton->hide(); oplTunnelButton->show();
@@ -255,12 +299,52 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setGybPlayer(nullptr);
                 JJoMeSynth::instance().setImsPlayer(imsPlayer);
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
                 imsPlayer->play();
                 dspButton->show(); bankButton->show(); oplTunnelButton->show();
                 updateDspButtonStyle(); // Update style
                 if (channelMonitor) {
                     channelMonitor->setImsMode(true, imsPlayer->getBankName(), imsPlayer->getInstruments(), QFileInfo(currentFile).suffix().toUpper());
                     channelMonitor->updateVoiceInstrumentNames(imsPlayer->getVoiceInstrumentNames());
+                }
+            } else if (isVgm) {
+                qDebug() << "[MainWindow] Starting VGM playback";
+                ensureJJoMeSynthReady();
+                JJoMeSynth::instance().setGybPlayer(nullptr);
+                JJoMeSynth::instance().setImsPlayer(nullptr);
+                JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(vgmPlayer);
+                vgmPlayer->setStereoMode(JJoMeSynth::instance().getOplStereoMode());
+                vgmPlayer->play();
+                dspButton->show(); bankButton->hide(); oplTunnelButton->hide();
+                updateDspButtonStyle();
+                if (channelMonitor) {
+                    channelMonitor->setImsMode(true, vgmPlayer->getBankName(),
+                                               vgmPlayer->getInstruments(), "VGM");
+                    channelMonitor->updateVoiceInstrumentNames(vgmPlayer->getVoiceInstrumentNames());
+                }
+            } else if (isMdx) {
+                qDebug() << "[MainWindow] Starting MDX playback";
+                ensureJJoMeSynthReady();
+                JJoMeSynth::instance().setGybPlayer(nullptr);
+                JJoMeSynth::instance().setImsPlayer(nullptr);
+                JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(mdxPlayer);
+                // The F12 pattern is a global setting; hand the current one to
+                // the engine at load, not only when it changes.
+                mdxPlayer->setStereoMode(JJoMeSynth::instance().getOplStereoMode());
+                mdxPlayer->play();
+                dspButton->show(); bankButton->hide(); oplTunnelButton->hide();
+                updateDspButtonStyle();
+                if (channelMonitor) {
+                    channelMonitor->setImsMode(true, mdxPlayer->getBankName(),
+                                               mdxPlayer->getInstruments(), "MDX");
+                    channelMonitor->updateVoiceInstrumentNames(mdxPlayer->getVoiceInstrumentNames());
                 }
             } else if (playOkaViaOpl) {
                 qDebug() << "[MainWindow] Starting OKA OPL playback";
@@ -280,6 +364,8 @@ void MainWindow::playPause()
                 JJoMeSynth::instance().setGybPlayer(nullptr);
                 JJoMeSynth::instance().setImsPlayer(nullptr);
                 JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
                 midiPlayer->play();
                 dspButton->hide(); bankButton->hide(); oplTunnelButton->hide();
                 if (channelMonitor) channelMonitor->setImsMode(false);
@@ -304,13 +390,19 @@ void MainWindow::stop()
         toggleRecording();
     }
 
-    midiPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+    midiPlayer->stop(); if (mldFmPlayer) mldFmPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
     imsPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
     gybPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
     okaPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+    mdxPlayer->stop();
+    vgmPlayer->stop();
+    JJoMeSynth::instance().setMdxPlayer(nullptr);
+    JJoMeSynth::instance().setVgmPlayer(nullptr);
     JJoMeSynth::instance().setImsPlayer(nullptr);
     JJoMeSynth::instance().setGybPlayer(nullptr);
     JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
     setPlaying(false);
     m_pausedByUser = false; // a stop is not a pause — Space won't "resume" after Stop
     positionTimer->stop();
@@ -421,6 +513,16 @@ void MainWindow::rewind()
         lastDisplayedLyricIndex = -1;
         return;
     }
+    if (isMdxFile(currentFile) && mdxPlayer) {
+        unsigned long current = mdxPlayer->getPosition();
+        mdxPlayer->setPosition((current > 5000) ? current - 5000 : 0);
+        return;
+    }
+    if (isVgmFile(currentFile) && vgmPlayer) {
+        unsigned long current = vgmPlayer->getPosition();
+        vgmPlayer->setPosition((current > 5000) ? current - 5000 : 0);
+        return;
+    }
     if (midiPlayer->getTotalDuration() > 0) {
         unsigned long current = midiPlayer->getCurrentPosition();
         unsigned long newPosition = (current > 5000) ? current - 5000 : 0;
@@ -458,6 +560,18 @@ void MainWindow::fastForward()
         lastDisplayedLyricIndex = -1;
         return;
     }
+    if (isMdxFile(currentFile) && mdxPlayer) {
+        unsigned long current = mdxPlayer->getPosition();
+        unsigned long total = mdxPlayer->getDuration();
+        mdxPlayer->setPosition((current + 5000 < total) ? current + 5000 : total);
+        return;
+    }
+    if (isVgmFile(currentFile) && vgmPlayer) {
+        unsigned long current = vgmPlayer->getPosition();
+        unsigned long total = vgmPlayer->getDuration();
+        vgmPlayer->setPosition((current + 5000 < total) ? current + 5000 : total);
+        return;
+    }
     if (midiPlayer->getTotalDuration() > 0) {
         unsigned long current = midiPlayer->getCurrentPosition();
         unsigned long total = midiPlayer->getTotalDuration();
@@ -472,6 +586,11 @@ void MainWindow::onVolumeChanged(int value)
     // AdPlug doesn't have a direct master volume in all players, 
     // but JJoMeSynth::setVolume affects both SoundFont and IMS
     JJoMeSynth::instance().setVolume(value / 127.0f);
+    // The MLD FM/PCM half is mixed in after everything above and keeps its own
+    // gain, which was set once at load and never again - so on a mixed .mdz
+    // the slider moved the MIDI half only, and at 0 the FM and PCM played on
+    // at full level (reported 2026-09-28 on NEW_Wa).
+    if (mldFmPlayer) mldFmPlayer->setVolume(value);
 
     // While an OPL song is tunnelled to the jukebox none of the above reaches
     // it: the sound is being made on the Pi, from the register writes. Pass the
@@ -516,9 +635,14 @@ void MainWindow::onPositionChanged(int value)
     // Only .oka uses the OPL OkaPlayer; .okm/.okw play via midiPlayer, so route
     // seeks there too (otherwise the seek hits an idle okaPlayer and does nothing).
     bool isOka = isOkaOplFile(currentFile);
+    const bool isMdx = isMdxFile(currentFile);
+    const bool isVgm = isVgmFile(currentFile);
     unsigned long duration = isGyb ? gybPlayer->getDuration()
-                                   : (isIms ? imsPlayer->getDuration() 
-                                            : (isOka ? okaPlayer->getDuration() : midiPlayer->getTotalDuration()));
+                                   : (isIms ? imsPlayer->getDuration()
+                                            : (isOka ? okaPlayer->getDuration()
+                                                     : (isMdx ? mdxPlayer->getDuration()
+                                                              : (isVgm ? vgmPlayer->getDuration()
+                                                                       : midiPlayer->getTotalDuration()))));
     if (duration > 0) {
         // Update position label immediately for visual feedback
         positionLabel->setText(QString::number(value) + "%");
@@ -532,6 +656,10 @@ void MainWindow::onPositionChanged(int value)
                 imsPlayer->setPosition(newPosition);
             } else if (isOka) {
                 okaPlayer->setPosition(newPosition);
+            } else if (isMdx) {
+                mdxPlayer->setPosition(newPosition);
+            } else if (isVgm) {
+                vgmPlayer->setPosition(newPosition);
             } else {
                 midiPlayer->setPosition(newPosition);
             }
@@ -546,14 +674,21 @@ void MainWindow::updatePosition()
     bool isOka = isOkaFile(currentFile);
     bool playOkaViaOpl = isOkaOplFile(currentFile);
 
+    const bool isMdx = isMdxFile(currentFile);
+    const bool isVgm = isVgmFile(currentFile);
+
     unsigned long current = isGyb ? gybPlayer->getPosition()
                                   : (isIms ? imsPlayer->getPosition()
                                            : (playOkaViaOpl ? okaPlayer->getPosition()
-                                                            : midiPlayer->getCurrentPosition()));
+                                                            : (isMdx ? mdxPlayer->getPosition()
+                                                                     : (isVgm ? vgmPlayer->getPosition()
+                                                                              : midiPlayer->getCurrentPosition()))));
     unsigned long total   = isGyb ? gybPlayer->getDuration()
                                   : (isIms ? imsPlayer->getDuration()
                                            : (playOkaViaOpl ? okaPlayer->getDuration()
-                                                            : midiPlayer->getTotalDuration()));
+                                                            : (isMdx ? mdxPlayer->getDuration()
+                                                                     : (isVgm ? vgmPlayer->getDuration()
+                                                                              : midiPlayer->getTotalDuration()))));
 
     if (isPlaying && total > 0) {
 
@@ -587,6 +722,12 @@ void MainWindow::updatePosition()
         } else if (playOkaViaOpl && channelMonitor && channelMonitor->isVisible()) {
             channelMonitor->updateImsVolumes(okaPlayer->getVoiceVolumes(), okaPlayer->getInstrumentVolumes());
             channelMonitor->updateVoiceInstrumentNames(okaPlayer->getVoiceInstrumentNames());
+        } else if (isMdx && channelMonitor && channelMonitor->isVisible()) {
+            channelMonitor->updateImsVolumes(mdxPlayer->getVoiceVolumes(), mdxPlayer->getInstrumentVolumes());
+            channelMonitor->updateVoiceInstrumentNames(mdxPlayer->getVoiceInstrumentNames());
+        } else if (isVgm && channelMonitor && channelMonitor->isVisible()) {
+            channelMonitor->updateImsVolumes(vgmPlayer->getVoiceVolumes(), vgmPlayer->getInstrumentVolumes());
+            channelMonitor->updateVoiceInstrumentNames(vgmPlayer->getVoiceInstrumentNames());
         }
 
         // Update lyrics window based on tick position (for NOB / GYB files) or percentage (for standard MIDI)
@@ -858,16 +999,27 @@ void MainWindow::setPlaying(bool playing)
     if (playing) m_pausedByUser = false; // any (re)start clears the pause flag
     JJoMeSynth::instance().setPlaybackActive(playing);
 
-    // 재생 상태 변화에 따른 녹음 버튼 동적 제어
-    if (playing) {
-        // 재생 시작 시: 녹음 중이 아닌 상태라면 녹음 버튼을 비활성화 (재생 중 녹음 시작 불가)
-        if (!JJoMeSynth::instance().isRecording()) {
-            recordButton->setEnabled(false);
-        }
-    } else {
-        // 재생 정지 시: 녹음 버튼을 무조건 활성화
-        recordButton->setEnabled(true);
+    // The MLD FM half rides on THIS, not on the individual play calls.
+    // Hooking those instead was the first attempt and it did not work: the
+    // transport has more entry points than the three obvious ones, so the FM
+    // half loaded - the label proved that - and then never started. One choke
+    // point every path already goes through cannot miss any of them.
+    //
+    // A pause is not a stop. Every pause path calls midiPlayer->pause() before
+    // it reaches here, so that flag says which this is: paused, the FM half
+    // holds its place and play() resumes it; stopped, it rewinds. It used to
+    // stop either way and restart from bar one on resume, while the MIDI half
+    // carried on from where it was - heard as the two halves playing apart.
+    if (mldFmPlayer && mldFmPlayer->isLoaded()) {
+        if (playing)                         mldFmPlayer->play();
+        else if (midiPlayer->isPaused())     mldFmPlayer->pause();
+        else                                 mldFmPlayer->stop();
     }
+
+    // The record button stays live throughout. It used to be greyed out for
+    // the whole of playback, so the only way to record was to arm it before
+    // pressing play - and nothing on screen said so.
+    recordButton->setEnabled(true);
 }
 
 void MainWindow::updatePlayButton()
@@ -948,6 +1100,17 @@ void MainWindow::updateTrackInfo()
             } else if (cleanFileName.endsWith(".gyb", Qt::CaseInsensitive)) {
                 cleanFileName = cleanFileName.left(cleanFileName.length() - 4);
             }
+        } else if (filePath.endsWith(".vgm", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".vgz", Qt::CaseInsensitive)) {
+            // Ahead of isOplFile() deliberately: that returns true for a VGM
+            // naming only OPL chips, which would send it to the IMS reader.
+            // A VGM's name is in its GD3 tag either way.
+            QString vgmTitle = VgmPlayer::extractTitleQuick(filePath);
+            if (!vgmTitle.isEmpty()) {
+                cleanFileName = vgmTitle;
+            } else if (cleanFileName.length() > 4) {
+                cleanFileName.chop(4);
+            }
         } else if (isOplFile(filePath)) {
             QString imsTitle;
             if (displayingPlayingFile) {
@@ -967,6 +1130,60 @@ void MainWindow::updateTrackInfo()
                 cleanFileName = okaTitle;
             } else if (cleanFileName.length() > 4) {
                 cleanFileName = cleanFileName.left(cleanFileName.length() - 4); // strip .oka/.okm
+            }
+        } else if (filePath.endsWith(".sng", Qt::CaseInsensitive) &&
+                   sngmidi::isSngFile(filePath)) {
+            // Ballade, not Recomposer. Its title is Shift-JIS on the second
+            // line of the header, so without this the title bar showed the
+            // filename while the playlist row - which the scanner decodes -
+            // showed the real name.
+            QString sngTitle = sngmidi::extractTitle(filePath);
+            if (!sngTitle.isEmpty()) {
+                cleanFileName = sngTitle;
+            } else if (cleanFileName.length() > 4) {
+                cleanFileName.chop(4);
+            }
+        } else if (filePath.endsWith(".rcp", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".r36", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".g36", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".g18", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".sng", Qt::CaseInsensitive)) {
+            // Recomposer. The scanner has decoded this for the playlist row
+            // since 2026-08, but the title bar never had a branch for it, so
+            // the two disagreed - the row showed the song name and the bar the
+            // filename. A .sng reaches here only when it is not Ballade, which
+            // the branch above has already ruled out.
+            QString rcpTitle = RcpFileHandler::extractTitle(filePath);
+            if (!rcpTitle.isEmpty()) {
+                cleanFileName = rcpTitle;
+            } else if (cleanFileName.length() > 4) {
+                cleanFileName.chop(4);
+            }
+        } else if (filePath.endsWith(".okw", Qt::CaseInsensitive)) {
+            // OkaFileHandler::isOkaFile() answers .oka and .okm only, and
+            // widening it would change routing - .okm/.okw play as MIDI
+            // deliberately. The title reader is extension-agnostic: Johab at
+            // offset 0x27, which is where an .okw keeps its name too.
+            QString okwTitle = OkaFileHandler::extractTitle(filePath);
+            if (!okwTitle.isEmpty()) {
+                cleanFileName = okwTitle;
+            } else if (cleanFileName.length() > 4) {
+                cleanFileName.chop(4);
+            }
+        } else if (filePath.endsWith(".mdx", Qt::CaseInsensitive) ||
+                   filePath.endsWith(".mdz", Qt::CaseInsensitive)) {
+            // There was no branch here, so an MDX showed its filename while the
+            // playlist row - which the scanner does decode - showed the real
+            // Shift-JIS title. Same shape as the .rcp omission in section 7-4.
+            //
+            // It reads the source file rather than the player, because a .mdz
+            // that routes its parts to a MIDI module is playing through a
+            // converted temp SMF and mdxPlayer is idle for it.
+            QString mdxTitle = MdxPlayer::extractTitleQuick(filePath);
+            if (!mdxTitle.isEmpty() && mdxTitle != QFileInfo(filePath).completeBaseName()) {
+                cleanFileName = mdxTitle;
+            } else if (cleanFileName.length() > 4) {
+                cleanFileName.chop(4);
             }
         } else if (filePath.endsWith(".mid", Qt::CaseInsensitive) ||
                    filePath.endsWith(".midi", Qt::CaseInsensitive)) {
@@ -1045,12 +1262,24 @@ void MainWindow::updateTimeDisplay()
     bool isGyb = isGybFile(currentFile);
     // Only .oka uses OkaPlayer; .okm plays via midiPlayer.
     bool isOka = isOkaOplFile(currentFile);
+    // MDX and VGM were missing here, so an MDX showed 00:00 / 00:00 and read
+    // its key, tempo and BPM off an idle midiPlayer - which is why F7 to F10
+    // looked like they did nothing. They do work; nothing said so.
+    const bool isMdx = isMdxFile(currentFile);
+    const bool isVgm = isVgmFile(currentFile);
+
     unsigned long current = isGyb ? gybPlayer->getPosition()
                                   : (isIms ? imsPlayer->getPosition()
-                                           : (isOka ? okaPlayer->getPosition() : midiPlayer->getCurrentPosition()));
+                                  : (isOka ? okaPlayer->getPosition()
+                                  : (isMdx ? mdxPlayer->getPosition()
+                                  : (isVgm ? vgmPlayer->getPosition()
+                                           : midiPlayer->getCurrentPosition()))));
     unsigned long total   = isGyb ? gybPlayer->getDuration()
                                   : (isIms ? imsPlayer->getDuration()
-                                           : (isOka ? okaPlayer->getDuration() : midiPlayer->getTotalDuration()));
+                                  : (isOka ? okaPlayer->getDuration()
+                                  : (isMdx ? mdxPlayer->getDuration()
+                                  : (isVgm ? vgmPlayer->getDuration()
+                                           : midiPlayer->getTotalDuration()))));
 
     // Current track number and total tracks
     int currentTrack = plCurrentRow() + 1;
@@ -1084,6 +1313,16 @@ void MainWindow::updateTimeDisplay()
         key = imsPlayer->getUserKeyTranspose();
         bpm = imsPlayer->getCurrentBpm();
         scale = imsPlayer->getUserTempoScale();
+    } else if (isMdx && mdxPlayer) {
+        key = mdxPlayer->getUserKeyTranspose();
+        bpm = mdxPlayer->getCurrentBpm();
+        scale = mdxPlayer->getUserTempoScale();
+    } else if (isVgm) {
+        // A VGM is a register log - it has no tempo of its own to report, and
+        // nothing to transpose.
+        key = 0;
+        bpm = 0;
+        scale = 100;
     } else if (!currentFile.isEmpty() && midiPlayer) {
         key = midiPlayer->getUserKeyTranspose();
         bpm = midiPlayer->getCurrentBpm();
@@ -1123,6 +1362,14 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
     bool isIms = isOplFile(filePath);
     bool isOka = isOkaFile(filePath);
     bool playOkaViaOpl = isOkaOplFile(filePath);
+    // MDX and VGM were missing from this whole function, and this is the one
+    // the playlist uses: auto-advance at the end of a track, shuffle, and the
+    // next/previous buttons all come through here. Without a branch they fell
+    // to midiPlayer->loadMidiFile(), which cannot read either format, so it
+    // returned false and playback simply stopped. Clicking a file worked
+    // because that goes through a different path entirely.
+    const bool isMdx = isMdxFile(filePath);
+    const bool isVgm = isVgmFile(filePath);
 
     if (isGyb) {
         SettingsManager& s = SettingsManager::instance();
@@ -1144,7 +1391,10 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
     if (isGyb)              loaded = gybPlayer->loadFile(filePath);
     else if (isIms)         loaded = imsPlayer->loadFile(filePath);
     else if (playOkaViaOpl) loaded = okaPlayer->loadFile(filePath);
+    else if (isMdx)         loaded = mdxPlayer->loadFile(filePath);
+    else if (isVgm)         loaded = vgmPlayer->loadFile(filePath);
     else                    loaded = midiPlayer->loadMidiFile(filePath);
+    if (loaded) setupMldFmHalf(filePath);
 
     if (!loaded) {
         setPlaying(false);
@@ -1155,7 +1405,7 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
     currentFile = filePath;
     currentRawPath = rawPath;
     bool isNobFile = filePath.toLower().endsWith(".nob");
-    if (!isGyb && !isIms && !playOkaViaOpl)
+    if (!isGyb && !isIms && !playOkaViaOpl && !isMdx && !isVgm)
         midiPlayer->setIsNobFile(isNobFile || isOka);
     updateLyricsWindowContent(filePath, isNobFile || isOka, true, "loadAndPlayByRawPath");
     updateTrackInfo();
@@ -1166,6 +1416,8 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setGybPlayer(gybPlayer);
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
         gybPlayer->play();
         dspButton->show(); bankButton->hide(); oplTunnelButton->show();
         updateDspButtonStyle();
@@ -1176,6 +1428,8 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         JJoMeSynth::instance().setGybPlayer(nullptr);
         JJoMeSynth::instance().setImsPlayer(imsPlayer);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
         imsPlayer->play();
         dspButton->show(); bankButton->show(); oplTunnelButton->show();
         updateDspButtonStyle();
@@ -1193,10 +1447,46 @@ bool MainWindow::loadAndPlayByRawPath(const QString& rawPath)
         if (channelMonitor)
             channelMonitor->setImsMode(true, okaPlayer->getBankName(),
                                        okaPlayer->getInstruments(), "OKA");
+    } else if (isMdx) {
+        ensureJJoMeSynthReady();
+        JJoMeSynth::instance().setGybPlayer(nullptr);
+        JJoMeSynth::instance().setImsPlayer(nullptr);
+        JJoMeSynth::instance().setOkaPlayer(nullptr);
+        JJoMeSynth::instance().setVgmPlayer(nullptr);
+        JJoMeSynth::instance().setMdxPlayer(mdxPlayer);
+        // The F12 pattern is a global setting; hand the current one over at
+        // load, not only when it changes.
+        mdxPlayer->setStereoMode(JJoMeSynth::instance().getOplStereoMode());
+        mdxPlayer->play();
+        dspButton->show(); bankButton->hide(); oplTunnelButton->hide();
+        updateDspButtonStyle();
+        if (channelMonitor) {
+            channelMonitor->setImsMode(true, mdxPlayer->getBankName(),
+                                       mdxPlayer->getInstruments(), "MDX");
+            channelMonitor->updateVoiceInstrumentNames(mdxPlayer->getVoiceInstrumentNames());
+        }
+    } else if (isVgm) {
+        ensureJJoMeSynthReady();
+        JJoMeSynth::instance().setGybPlayer(nullptr);
+        JJoMeSynth::instance().setImsPlayer(nullptr);
+        JJoMeSynth::instance().setOkaPlayer(nullptr);
+        JJoMeSynth::instance().setMdxPlayer(nullptr);
+        JJoMeSynth::instance().setVgmPlayer(vgmPlayer);
+        vgmPlayer->setStereoMode(JJoMeSynth::instance().getOplStereoMode());
+        vgmPlayer->play();
+        dspButton->show(); bankButton->hide(); oplTunnelButton->hide();
+        updateDspButtonStyle();
+        if (channelMonitor) {
+            channelMonitor->setImsMode(true, vgmPlayer->getBankName(),
+                                       vgmPlayer->getInstruments(), "VGM");
+            channelMonitor->updateVoiceInstrumentNames(vgmPlayer->getVoiceInstrumentNames());
+        }
     } else {
         JJoMeSynth::instance().setGybPlayer(nullptr);
         JJoMeSynth::instance().setImsPlayer(nullptr);
         JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
         midiPlayer->play();
         dspButton->hide(); bankButton->hide(); oplTunnelButton->hide();
         if (channelMonitor) channelMonitor->setImsMode(false);
@@ -1223,6 +1513,8 @@ void MainWindow::spacePauseResume()
         imsPlayer->pause();
         gybPlayer->pause();
         okaPlayer->pause();
+        mdxPlayer->pause();
+        vgmPlayer->pause();
         setPlaying(false);
         positionTimer->stop();
         m_pausedByUser = true;   // remember this was a pause (not a stop)
@@ -1238,21 +1530,41 @@ void MainWindow::spacePauseResume()
             JJoMeSynth::instance().setGybPlayer(gybPlayer);
             JJoMeSynth::instance().setImsPlayer(nullptr);
             JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
             gybPlayer->play();
         } else if (isIms) {
             JJoMeSynth::instance().setGybPlayer(nullptr);
             JJoMeSynth::instance().setImsPlayer(imsPlayer);
             JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
             imsPlayer->play();
         } else if (playOkaViaOpl) {
             JJoMeSynth::instance().setGybPlayer(nullptr);
             JJoMeSynth::instance().setImsPlayer(nullptr);
             JJoMeSynth::instance().setOkaPlayer(okaPlayer);
             okaPlayer->play();
+        } else if (isMdxFile(currentFile)) {
+            JJoMeSynth::instance().setGybPlayer(nullptr);
+            JJoMeSynth::instance().setImsPlayer(nullptr);
+            JJoMeSynth::instance().setOkaPlayer(nullptr);
+            JJoMeSynth::instance().setVgmPlayer(nullptr);
+            JJoMeSynth::instance().setMdxPlayer(mdxPlayer);
+            mdxPlayer->play();
+        } else if (isVgmFile(currentFile)) {
+            JJoMeSynth::instance().setGybPlayer(nullptr);
+            JJoMeSynth::instance().setImsPlayer(nullptr);
+            JJoMeSynth::instance().setOkaPlayer(nullptr);
+            JJoMeSynth::instance().setMdxPlayer(nullptr);
+            JJoMeSynth::instance().setVgmPlayer(vgmPlayer);
+            vgmPlayer->play();
         } else {
             JJoMeSynth::instance().setGybPlayer(nullptr);
             JJoMeSynth::instance().setImsPlayer(nullptr);
             JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
             midiPlayer->play();
         }
         setPlaying(true);
@@ -1401,7 +1713,7 @@ void MainWindow::handleExternalFileLoad(const QString& filePath)
 
     // Check if it's a supported format
     QString suffix = fileInfo.suffix().toLower();
-    if (suffix != "mid" && suffix != "midi" && suffix != "nob" && suffix != "ims" && suffix != "rol" && suffix != "zip" && suffix != "sop" && suffix != "gyb" && suffix != "oka" && suffix != "okm" && suffix != "vgm" && suffix != "vgz") {
+    if (!FolderScanner::isPlayableSuffix(suffix) && suffix != "zip") {
         return;
     }
 
@@ -1434,7 +1746,7 @@ void MainWindow::onDeviceChanged(int index)
             qDebug() << "Switching device during playback - stopping first";
             
             // Stop logic
-            midiPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
+            midiPlayer->stop(); if (mldFmPlayer) mldFmPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             imsPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             okaPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             // GYB was missing from this list, so changing the device while a
@@ -1444,6 +1756,8 @@ void MainWindow::onDeviceChanged(int index)
             gybPlayer->stop(); if(pianoRollWindow) pianoRollWindow->clearNotes();
             JJoMeSynth::instance().setImsPlayer(nullptr);
             JJoMeSynth::instance().setOkaPlayer(nullptr);
+                JJoMeSynth::instance().setMdxPlayer(nullptr);
+                JJoMeSynth::instance().setVgmPlayer(nullptr);
             JJoMeSynth::instance().setGybPlayer(nullptr);
             setPlaying(false);
             
@@ -1730,7 +2044,29 @@ void MainWindow::loadMidiDeviceSettings()
 bool MainWindow::isOplFile(const QString& filePath) const
 {
     QString lower = filePath.toLower();
-    return lower.endsWith(".ims") || lower.endsWith(".rol") || lower.endsWith(".sop") || lower.endsWith(".vgm") || lower.endsWith(".vgz");
+    if (lower.endsWith(".vgm") || lower.endsWith(".vgz")) {
+        // A VGM that names only OPL chips still belongs to AdPlug - that path
+        // covers 18 of the 36 files here and has played them for a long time.
+        // Anything else (Mega Drive, YM2151, Game Boy) goes to VgmPlayer.
+        return !isVgmFile(filePath);
+    }
+    return lower.endsWith(".ims") || lower.endsWith(".rol") || lower.endsWith(".sop");
+}
+
+// Asks the file, not its name: the answer depends on which chips it declares.
+// The result is cached because this is called from the position timer.
+bool MainWindow::isVgmFile(const QString& filePath) const
+{
+    const QString lower = filePath.toLower();
+    if (!lower.endsWith(".vgm") && !lower.endsWith(".vgz")) return false;
+
+    static QString cachedPath;
+    static bool cachedAnswer = false;
+    if (filePath != cachedPath) {
+        cachedPath = filePath;
+        cachedAnswer = VgmPlayer::handlesFile(filePath);
+    }
+    return cachedAnswer;
 }
 
 bool MainWindow::isGybFile(const QString& filePath) const
@@ -1741,6 +2077,29 @@ bool MainWindow::isGybFile(const QString& filePath) const
     // has to answer false here or eleven call sites would each need the same
     // exception.
     return filePath.toLower().endsWith(".gyb") && !playsViaMidi(filePath);
+}
+
+bool MainWindow::isMdxFile(const QString& filePath) const
+{
+    const QString lower = filePath.toLower();
+    if (!lower.endsWith(".mdx") && !lower.endsWith(".mdz")) return false;
+
+    // "is the CHIP engine playing this", not "does the name end in .mdx" - the
+    // same question isGybFile() answers for OPL. A .mdz that routes its tracks
+    // to an external module (the 0xE1 command) has no FM patches for them, so
+    // it goes down the MIDI path instead and every caller here - routing,
+    // seeking, tempo, the title lookup - follows without needing its own
+    // exception.
+    //
+    // Answering costs a load, and this is asked on every transport action, so
+    // the last answer is kept. The files do not change under us.
+    static QString s_lastPath;
+    static bool s_lastIsChip = true;
+    if (filePath != s_lastPath) {
+        s_lastPath = filePath;
+        s_lastIsChip = !mdxmidi::hasMidiTracks(filePath);
+    }
+    return s_lastIsChip;
 }
 
 bool MainWindow::isOkaFile(const QString& filePath) const
@@ -2046,7 +2405,19 @@ void MainWindow::showPatchDialog()
 void MainWindow::toggleRecording() {
     JJoMeSynth& synth = JJoMeSynth::instance();
     if (synth.isRecording()) {
-        synth.stopRecording();
+        const QString written = synth.stopRecording();
+        if (written.isEmpty()) {
+            // Nothing was captured. The commonest reason is that the song went
+            // out to an external MIDI device, so this application rendered no
+            // audio of its own - and saying nothing looked exactly like a
+            // recording that had worked.
+            QMessageBox::information(this, "Recording",
+                "No audio was captured, so no file was written.\n\n"
+                "Recording captures what this program plays. If the song is "
+                "going out to an external MIDI device or module, its sound "
+                "never passes through here - choose an internal synth "
+                "(SoundFont / MT-32 / SC-55) and record again.");
+        }
         recordButton->setText("⏺");
         recordButton->setStyleSheet(
             "QPushButton {"
@@ -2062,15 +2433,14 @@ void MainWindow::toggleRecording() {
             "    border: 2px solid #ff4444;"
             "}"
         );
-        // 재생 중일 때 녹음 중지를 명시적으로 누른 것이라면, 재생 중엔 다시 녹음을 시작할 수 없으므로 비활성화
-        if (isPlaying) {
-            recordButton->setEnabled(false);
-        }
     } else {
-        // 재생 중일 때는 녹음을 시작할 수 없음
-        if (isPlaying) {
-            return;
-        }
+        // Recording used to refuse to start while a song was playing, and did
+        // it by returning without a word - so pressing record mid-song looked
+        // like a broken button. It now rewinds and starts the song again with
+        // the recorder already armed, which is what pressing record during
+        // playback is asking for.
+        const bool restart = isPlaying && !currentRawPath.isEmpty();
+        const QString restartPath = currentRawPath;
 
         QString appDir = QApplication::applicationDirPath();
         QString recDirPath = QDir(appDir).absoluteFilePath("rec");
@@ -2101,6 +2471,10 @@ void MainWindow::toggleRecording() {
         QString filePath = QDir(recDirPath).absoluteFilePath(QString("%1_%2.wav").arg(baseName, timeStr));
         
         if (synth.startRecording(filePath)) {
+            if (restart) {
+                stop();
+                loadAndPlayByRawPath(restartPath);
+            }
             recordButton->setText("🛑");
             recordButton->setStyleSheet(
                 "QPushButton {"
@@ -2185,5 +2559,69 @@ void MainWindow::onControllerChange(int channel, int controller, int value)
     // Forward to channel monitor if it exists
     if (channelMonitor) {
         channelMonitor->onControllerChange(channel, controller, value);
+    }
+}
+
+// The FM half of an MLD song, alongside the MIDI half rather than instead of
+// it. Called wherever a song is loaded; it does nothing for the 146 files that
+// are MIDI only, and nothing at all for any other format.
+void MainWindow::setupMldFmHalf(const QString& filePath)
+{
+    if (!mldFmPlayer) return;
+    mldFmPlayer->stop();
+    mldFmPlayer->unload();
+
+    const QString ext = QFileInfo(filePath).suffix().toLower();
+    bool has = false;
+    if (ext == "mdz" || ext == "mdx") has = mldFmPlayer->loadFile(filePath);
+
+    // The balance slider appears only for a song that has both halves. It
+    // starts at the centre - the level each half's own file asks for.
+    // A BALANCE, not a second volume: centre is what the file asks for, left
+    // takes the FM/PCM half down (MIDI remains), right the MIDI half. It used to read
+    // "FM 32트랙" beside the volume, which looked like another volume and
+    // counted the offset table's slots rather than FM tracks (2026-09-28).
+    fmBalanceLabel->setVisible(has);
+    fmBalanceSlider->setVisible(has);
+    if (fmBalanceValue) fmBalanceValue->setVisible(has);
+    if (has) {
+        mldFmPlayer->setBalance(fmBalanceSlider->value());
+        mldFmPlayer->setVolume(volumeSlider->value());
+        // F7-F11 state outlives a song on the MIDI player; the FM half has to
+        // start from the same numbers or the two halves part at the first bar.
+        mldFmPlayer->setTempoScale(midiPlayer->getUserTempoScale());
+        mldFmPlayer->setTranspose(midiPlayer->getUserKeyTranspose());
+        // THE AUDIO DEVICE HAS TO BE OPEN, and nothing else opens it here.
+        // ensureJJoMeSynthReady() is called from the OPL branches only, because
+        // a song going out as MIDI never needed jmp's own audio - so with
+        // Nuked-SC55 or a real port selected there was no callback at all, and
+        // the FM half had nowhere to render. Muting the SC-55 gave silence
+        // rather than the FM part, which is what found this.
+        //
+        // The comment above that function describes the SAME BUG one branch
+        // over: it used to be initialised only in the IMS branch, so playing a
+        // .GYB first produced no audio callback either (2026-07-16). A source
+        // that makes its own sound has to ask for the device, whatever the MIDI
+        // destination happens to be.
+        ensureJJoMeSynthReady();
+    }
+    qDebug() << "[MLD] FM half for" << filePath << "->" << has
+             << "tracks" << (has ? mldFmPlayer->fmTrackCount() : 0);
+}
+
+void MainWindow::onFmBalanceChanged(int value)
+{
+    // Snap to the centre: "exactly what the files ask for" is the setting
+    // people come back to, and 49 or 51 by accident is inaudible but wrong.
+    if (value != 50 && value >= 47 && value <= 53) {
+        fmBalanceSlider->setValue(50);          // re-enters with 50
+        return;
+    }
+    if (mldFmPlayer) mldFmPlayer->setBalance(value);
+    if (fmBalanceValue) {
+        // What is being taken away, as the percentage left of that half.
+        if (value == 50)     fmBalanceValue->setText(LSTR("기본", "even"));
+        else if (value < 50) fmBalanceValue->setText(QString("FM %1%").arg(value * 2));
+        else                 fmBalanceValue->setText(QString("MIDI %1%").arg((100 - value) * 2));
     }
 }

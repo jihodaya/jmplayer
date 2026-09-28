@@ -74,3 +74,100 @@ This application is built using the Qt toolkit, which is licensed under the GNU 
 *   **Sample Songs (BK/ folder):**
     *   **Description:** Legacy IMS, ISS, and ROL songs used in 1990s Korean PC music players (Oksori, Hanulso, etc.).
     *   **Notice:** Provided for non-commercial archiving and format testing purposes. All copyrights of the original compositions belong to their respective authors. Special thanks to **BK (병코돌고래)** for providing these sample files.
+
+### munt (libmt32emu) - MT-32 / CM-32L emulation
+
+*   **License:** GNU Lesser General Public License, Version 2.1 or later (LGPLv2.1+)
+*   **Copyright:** Copyright (C) 2003-2026 Dean Beeler, Jerome Fisher, Sergey V. Mikayev and others
+*   **Website:** [https://github.com/munt/munt](https://github.com/munt/munt)
+*   **Notice:** Built as a separate library and linked dynamically (`libmt32emu-2.dll`), so it can be replaced. Roland's MT-32 ROM images are not included.
+
+### Nuked-OPM - YM2151 emulation (`.mdx`, `.mdz`, `.vgm`)
+
+*   **License:** GNU Lesser General Public License, Version 2.1 or later (LGPLv2.1+)
+*   **Copyright:** Copyright (C) 2020, 2026 Nuke.YKT
+*   **Website:** [https://github.com/nukeykt/Nuked-OPM](https://github.com/nukeykt/Nuked-OPM)
+*   **Notice:** Compiled into the program (`mdxcore/opm.c`). The complete source of this program is published, so it can be rebuilt against a modified copy.
+
+### Nuked-OPN2 - YM2612 / YM3438 emulation (`.vgm`)
+
+*   **License:** GNU Lesser General Public License, Version 2.1 or later (LGPLv2.1+)
+*   **Copyright:** Copyright (C) 2017-2022 Alexey Khokholov (Nuke.YKT)
+*   **Website:** [https://github.com/nukeykt/Nuked-OPN2](https://github.com/nukeykt/Nuked-OPN2)
+*   **Notice:** Compiled into the program (`vgmcore/ym3438.c`), on the same terms as Nuked-OPM above.
+
+### emu2413 - YM2413 emulation (`.vgm`)
+
+*   **License:** MIT License
+*   **Copyright:** Copyright (c) 2001-2019 Mitsutaka Okazaki
+*   **Website:** [https://github.com/digital-sound-antiques/emu2413](https://github.com/digital-sound-antiques/emu2413)
+
+### emu2149 - AY-3-8910 / YM2149 emulation (`.vgm`)
+
+*   **License:** MIT License
+*   **Copyright:** Copyright (c) 2014 Mitsutaka Okazaki
+*   **Website:** [https://github.com/digital-sound-antiques/emu2149](https://github.com/digital-sound-antiques/emu2149)
+
+The MIT License text that applies to both of the above:
+
+```
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### ymfm - YM2610 emulation (`.vgm`)
+
+*   **License:** BSD 3-Clause License
+*   **Copyright:** Copyright (c) 2021, Aaron Giles
+*   **Website:** [https://github.com/aaronsgiles/ymfm](https://github.com/aaronsgiles/ymfm)
+
+### qsound-hle - Capcom QSound emulation (`.vgm`)
+
+*   **License:** BSD 3-Clause License
+*   **Copyright:** Copyright (c) 2018, ValleyBell, Ian Karlsson
+*   **Website:** [https://github.com/ValleyBell/qsound-hle](https://github.com/ValleyBell/qsound-hle)
+*   **Modification:** one line in `get_sample()` applies the ROM address mask, so a song cannot read outside its own sample data. The change is marked in the source.
+
+The BSD 3-Clause License text that applies to both of the above:
+
+```
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

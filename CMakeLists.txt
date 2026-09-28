@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(MidiPlayer VERSION 1.0.0 LANGUAGES CXX)
+# C is here for Nuked-OPM (mdxcore/opm.c) and Nuked-OPN2
+# (vgmcore/ym3438.c), both plain C.
+project(MidiPlayer VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,7 +46,7 @@ FetchContent_MakeAvailable(adplug)
 # those two are GPL-3.0 and would take jmp's licence with them. SOURCE_SUBDIR
 # is what keeps the rest of the tree out of the build.
 #
-# Shared on purpose. Dynamic linking is what lets a public-domain program use
+# Shared on purpose. Dynamic linking is what lets an MIT-licensed program use
 # an LGPL library, and it is the same arrangement Qt and adplug are in here.
 #
 # A local checkout can be used instead of cloning by setting
@@ -193,6 +195,8 @@ set(SOURCES
     main.cpp
     mainwindow.cpp
     midiplayer.cpp
+    mldfm.cpp
+    mldfmplayer.cpp
     channelmonitor.cpp
     lyricswindow.cpp
     lyricswindow_editor.cpp
@@ -201,6 +205,31 @@ set(SOURCES
     mainwindow_playback.cpp
     settingsmanager.cpp
     nobfilehandler.cpp
+    rcpfilehandler.cpp
+    sngmidi.cpp
+    mdxmidi.cpp
+    mdxplayer.cpp
+    mdxcore/mxdrv.cpp
+    mdxcore/ym2151.cpp
+    mdxcore/msm6258.cpp
+    mdxcore/opm.c
+    vgmplayer.cpp
+    vgmcore/vgmbackend.cpp
+    vgmcore/ym2612.cpp
+    vgmcore/sn76489.cpp
+    vgmcore/gbdmg.cpp
+    vgmcore/ay8910.cpp
+    vgmcore/ym2413.cpp
+    vgmcore/segapcm.cpp
+    vgmcore/ym2610.cpp
+    vgmcore/qsound.cpp
+    vgmcore/qsoundhle/qsound.c
+    vgmcore/ymfm/ymfm_opn.cpp
+    vgmcore/ymfm/ymfm_adpcm.cpp
+    vgmcore/ymfm/ymfm_ssg.cpp
+    vgmcore/ym3438.c
+    vgmcore/emu2149.c
+    vgmcore/emu2413.c
     gybfilehandler.cpp
     okafilehandler.cpp
     okabackend.cpp
@@ -209,6 +238,7 @@ set(SOURCES
     gybplayer.cpp
     gybbackend.cpp
     jjomesynth.cpp
+    
     soundfontmanagerdialog.cpp
     imsplayer.cpp
     issfilehandler.cpp
@@ -257,6 +287,8 @@ set(HEADERS
     constants.h
     settingsmanager.h
     nobfilehandler.h
+    rcpfilehandler.h
+    sngmidi.h
     gybfilehandler.h
     okafilehandler.h
     okabackend.h
@@ -303,6 +335,14 @@ endif()
 # )
 
 # Create executable
+# emu2413's register write is guarded by `if (reg >= 0x40) return;` against a
+# `uint8_t reg[0x40]`, so the store is provably in range; GCC's value-range
+# propagation loses that across the mirror-register subtraction just above it
+# and warns anyway. Silenced on the one file rather than patched, because this
+# is vendored third-party code and the next update would drop the patch.
+set_source_files_properties(vgmcore/emu2413.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-stringop-overflow")
+
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${RESOURCES})
 
 # Link Qt6 libraries
@@ -319,7 +359,9 @@ target_link_libraries(${PROJECT_NAME}
     dwmapi
     dbghelp   # crash log: symbol lookup for the unhandled-exception filter
     avrt      # MMCSS for the SC-55 pipe sender thread - see sc55bridge.cpp
+    z         # gzip: a .vgz is a gzipped .vgm - see vgmcore/vgmbackend.cpp
 )
+target_compile_definitions(${PROJECT_NAME} PRIVATE JMP_HAVE_QZIP)
 
 # English UI build: pass -DENGLISH_UI=ON to build all player UI text in English.
 # (Song lyrics are NOT affected — only the player's own interface text.)
@@ -355,7 +397,7 @@ if(BUILD_TESTS)
         convert/gmmap.cpp
         convert/oplbank.cpp
     )
-    target_link_libraries(loadall PRIVATE Qt6::Core adplug)
+    target_link_libraries(loadall PRIVATE Qt6::Core adplug z)
     target_include_directories(loadall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # The MT-32 engine with no window and no audio device. Mt32Synth renders
@@ -369,6 +411,16 @@ if(BUILD_TESTS)
     target_link_libraries(mt32 PRIVATE Qt6::Core Qt6::Widgets mt32emu)
     target_include_directories(mt32 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+    # A MIDI file through the built-in MT-32 to a WAV, for levels against the
+    # MLD FM half. ROMs from MT32ROMs\ beside the exe, as the player reads them.
+    add_executable(mt32wav
+        tests/mt32wav.cpp
+        mt32synth.cpp
+        settingsmanager.cpp
+    )
+    target_link_libraries(mt32wav PRIVATE Qt6::Core Qt6::Widgets mt32emu)
+    target_include_directories(mt32wav PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
     # The panel itself. Needs a window, so unlike the rest of these it cannot be
     # called headless - but a popup is not testable any other way, and the bug
     # it exists for came from exactly that kind of widget behaviour.
@@ -381,6 +433,18 @@ if(BUILD_TESTS)
     )
     target_link_libraries(mt32ui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets mt32emu)
     target_include_directories(mt32ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Output latency of jmp's own device against Nuked-SC55's, measured with a
+    # WASAPI loopback capture. Needs NukedSC55\ beside the exe, like the player,
+    # and a quiet machine. Carries its own miniaudio implementation because it
+    # does not link jjomesynth.cpp.
+    add_executable(latency
+        tests/latency.cpp
+        sc55bridge.cpp
+        settingsmanager.cpp
+    )
+    target_link_libraries(latency PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets avrt)
+    target_include_directories(latency PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # Renders through the real players, so it links what they need. Qt6::Gui is
     # in there because ImsPlayer reaches into the piano-roll types; no window is
@@ -401,9 +465,38 @@ if(BUILD_TESTS)
         # does not start anything: the singleton only opens a device in
         # initialize(), which nothing here calls.
         jjomesynth.cpp
+        # JJoMeSynth mixes the MLD FM engine in additively, so linking it
+        # brings that along too - the same reason mdxplayer.cpp is here. The
+        # FM engine reads the file through mdxmidi's shared header parser, so
+        # that comes with it.
+        mldfmplayer.cpp mldfm.cpp mdxmidi.cpp
+        # JJoMeSynth renders the MDX engine too, so it has to link.
+        mdxplayer.cpp
+        mdxcore/mxdrv.cpp
+        mdxcore/ym2151.cpp
+        mdxcore/msm6258.cpp
+        mdxcore/opm.c
+    vgmplayer.cpp
+    vgmcore/vgmbackend.cpp
+    vgmcore/ym2612.cpp
+    vgmcore/sn76489.cpp
+    vgmcore/gbdmg.cpp
+    vgmcore/ay8910.cpp
+    vgmcore/ym2413.cpp
+    vgmcore/segapcm.cpp
+    vgmcore/ym2610.cpp
+    vgmcore/qsound.cpp
+    vgmcore/qsoundhle/qsound.c
+    vgmcore/ymfm/ymfm_opn.cpp
+    vgmcore/ymfm/ymfm_adpcm.cpp
+    vgmcore/ymfm/ymfm_ssg.cpp
+    vgmcore/ym3438.c
+    vgmcore/emu2149.c
+    vgmcore/emu2413.c
+
         mt32synth.cpp   # JJoMeSynth renders through it; nothing opens unless asked
     )
-    target_link_libraries(render PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu winmm)
+    target_link_libraries(render PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu winmm z)
     target_include_directories(render PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # Rubbish into every value that comes from outside the program. Needs only
@@ -420,7 +513,7 @@ if(BUILD_TESTS)
         convert/gmmap.cpp
         convert/oplbank.cpp
     )
-    target_link_libraries(inputs PRIVATE Qt6::Core adplug)
+    target_link_libraries(inputs PRIVATE Qt6::Core adplug z)
     target_include_directories(inputs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # MidiPlayer's parse, tempo map, sound-mode detection and lyric decoding.
@@ -430,6 +523,31 @@ if(BUILD_TESTS)
         tests/midiall.cpp
         midiplayer.cpp
         nobfilehandler.cpp
+        rcpfilehandler.cpp
+        sngmidi.cpp
+        mdxmidi.cpp
+        mdxplayer.cpp
+        mdxcore/mxdrv.cpp
+        mdxcore/ym2151.cpp
+        mdxcore/msm6258.cpp
+        mdxcore/opm.c
+    vgmplayer.cpp
+    vgmcore/vgmbackend.cpp
+    vgmcore/ym2612.cpp
+    vgmcore/sn76489.cpp
+    vgmcore/gbdmg.cpp
+    vgmcore/ay8910.cpp
+    vgmcore/ym2413.cpp
+    vgmcore/segapcm.cpp
+    vgmcore/ym2610.cpp
+    vgmcore/qsound.cpp
+    vgmcore/qsoundhle/qsound.c
+    vgmcore/ymfm/ymfm_opn.cpp
+    vgmcore/ymfm/ymfm_adpcm.cpp
+    vgmcore/ymfm/ymfm_ssg.cpp
+    vgmcore/ym3438.c
+    vgmcore/emu2149.c
+    vgmcore/emu2413.c
         okafilehandler.cpp
         issfilehandler.cpp
         gybokamidi.cpp
@@ -445,6 +563,12 @@ if(BUILD_TESTS)
         # brings them along. Nothing starts: no device is opened and no player
         # is loaded unless a test asks for one.
         jjomesynth.cpp
+        # JJoMeSynth mixes the MLD FM engine in additively, so linking it
+        # brings that along too - the same reason mdxplayer.cpp is here. The
+        # FM engine reads the file through mdxmidi's shared header parser, so
+        # that comes with it.
+        mldfmplayer.cpp mldfm.cpp
+        
         gybplayer.cpp gybbackend.cpp
         okaplayer.cpp okabackend.cpp
         imsplayer.cpp
@@ -463,10 +587,221 @@ if(BUILD_TESTS)
     # with mt32synth.cpp - both are pulled in by midiplayer.cpp, not by the test.
     target_link_libraries(midiall PRIVATE
         Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu
-        winmm dwmapi avrt)
+        winmm dwmapi avrt z)
     target_include_directories(midiall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    foreach(t loadall render inputs midiall mt32 mt32ui)
+    # Converts one Recomposer file to SMF and writes it out, so the result can
+    # be diffed against the reference .MID that ships beside some of these
+    # songs. Same link set as midiall, minus what only the harness needs -
+    # RcpFileHandler calls MidiPlayer::decodeMetaText() for the Shift-JIS title,
+    # which is why midiplayer.cpp is here at all.
+    add_executable(rcpdump
+        tests/rcpdump.cpp
+        rcpfilehandler.cpp
+        sngmidi.cpp
+        mdxmidi.cpp
+        mdxplayer.cpp
+        mdxcore/mxdrv.cpp
+        mdxcore/ym2151.cpp
+        mdxcore/msm6258.cpp
+        mdxcore/opm.c
+    vgmplayer.cpp
+    vgmcore/vgmbackend.cpp
+    vgmcore/ym2612.cpp
+    vgmcore/sn76489.cpp
+    vgmcore/gbdmg.cpp
+    vgmcore/ay8910.cpp
+    vgmcore/ym2413.cpp
+    vgmcore/segapcm.cpp
+    vgmcore/ym2610.cpp
+    vgmcore/qsound.cpp
+    vgmcore/qsoundhle/qsound.c
+    vgmcore/ymfm/ymfm_opn.cpp
+    vgmcore/ymfm/ymfm_adpcm.cpp
+    vgmcore/ymfm/ymfm_ssg.cpp
+    vgmcore/ym3438.c
+    vgmcore/emu2149.c
+    vgmcore/emu2413.c
+        midiplayer.cpp
+        nobfilehandler.cpp
+        okafilehandler.cpp
+        issfilehandler.cpp
+        gybokamidi.cpp
+        mt32map.cpp
+        settingsmanager.cpp
+        sc55bridge.cpp
+        mt32synth.cpp
+        midireset.cpp
+        jjomesynth.cpp
+        # JJoMeSynth mixes the MLD FM engine in additively, so linking it
+        # brings that along too - the same reason mdxplayer.cpp is here. The
+        # FM engine reads the file through mdxmidi's shared header parser, so
+        # that comes with it.
+        mldfmplayer.cpp mldfm.cpp
+        
+        imsplayer.cpp
+        gybplayer.cpp
+        gybbackend.cpp
+        okaplayer.cpp
+        okabackend.cpp
+        bnkfill.cpp
+        gybfilehandler.cpp
+        opltunnelsender.cpp
+        convert/gyb.cpp
+        convert/oksori.cpp
+        convert/smf.cpp
+        convert/gmmap.cpp
+        convert/oplbank.cpp
+    )
+    target_link_libraries(rcpdump PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu
+        winmm dwmapi avrt z)
+    target_include_directories(rcpdump PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # midiwav: renders a .MID or .RCP to a WAV through TinySoundFont, so two
+    # files can be compared as audio. Same link set as rcpdump because it uses
+    # the same converter.
+    set(JMP_TEST_ENGINE_SOURCES
+        rcpfilehandler.cpp
+        sngmidi.cpp
+        # midiplayer.cpp converts a MIDI-routed .mdz through this, so every
+        # target that links midiplayer.cpp needs it too - midiall is a separate
+        # target and failed to link without it.
+        mdxmidi.cpp
+        mdxplayer.cpp
+        mdxcore/mxdrv.cpp
+        mdxcore/ym2151.cpp
+        mdxcore/msm6258.cpp
+        mdxcore/opm.c
+        vgmplayer.cpp
+        vgmcore/vgmbackend.cpp
+        vgmcore/ym2612.cpp
+        vgmcore/sn76489.cpp
+        vgmcore/gbdmg.cpp
+        vgmcore/ay8910.cpp
+        vgmcore/ym2413.cpp
+        vgmcore/segapcm.cpp
+        vgmcore/ym2610.cpp
+        vgmcore/qsound.cpp
+        vgmcore/qsoundhle/qsound.c
+    vgmcore/qsound.cpp
+    vgmcore/qsoundhle/qsound.c
+        vgmcore/ymfm/ymfm_opn.cpp
+        vgmcore/ymfm/ymfm_adpcm.cpp
+        vgmcore/ymfm/ymfm_ssg.cpp
+    vgmcore/ym2610.cpp
+    vgmcore/qsound.cpp
+    vgmcore/qsoundhle/qsound.c
+    vgmcore/ymfm/ymfm_opn.cpp
+    vgmcore/ymfm/ymfm_adpcm.cpp
+    vgmcore/ymfm/ymfm_ssg.cpp
+        vgmcore/ym3438.c
+        vgmcore/emu2149.c
+        vgmcore/emu2413.c
+        midiplayer.cpp
+        nobfilehandler.cpp
+        okafilehandler.cpp
+        issfilehandler.cpp
+        gybokamidi.cpp
+        mt32map.cpp
+        settingsmanager.cpp
+        sc55bridge.cpp
+        mt32synth.cpp
+        midireset.cpp
+        jjomesynth.cpp
+        # JJoMeSynth mixes the MLD FM engine in additively, so linking it
+        # brings that along too - the same reason mdxplayer.cpp is here. The
+        # FM engine reads the file through mdxmidi's shared header parser, so
+        # that comes with it.
+        mldfmplayer.cpp mldfm.cpp
+        imsplayer.cpp
+        gybplayer.cpp
+        gybbackend.cpp
+        okaplayer.cpp
+        okabackend.cpp
+        bnkfill.cpp
+        gybfilehandler.cpp
+        opltunnelsender.cpp
+        convert/gyb.cpp
+        convert/oksori.cpp
+        convert/smf.cpp
+        convert/gmmap.cpp
+        convert/oplbank.cpp
+    )
+
+    # Renders an .MDX with our own engine, so it can be scored against the
+    # reference the real driver produced (see CLAUDE.md 7-5). It was a scratch
+    # tool built by hand; it is a target now because .mdz files that produce no
+    # sound cannot be diagnosed any other way.
+    add_executable(mdxrender
+        tests/mdxrender.cpp
+        mdxcore/mxdrv.cpp mdxcore/ym2151.cpp mdxcore/msm6258.cpp mdxcore/opm.c)
+    target_include_directories(mdxrender PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # vgmrender: a .vgm/.vgz to a WAV, and a check that the command stream
+    # parses to the sample count its own header declares. Also the quickest way
+    # to ask which chips a file wants and whether this build has them.
+    add_executable(vgmrender
+        tests/vgmrender.cpp
+        vgmcore/vgmbackend.cpp vgmcore/ym2612.cpp vgmcore/sn76489.cpp
+        vgmcore/gbdmg.cpp vgmcore/ym3438.c
+        vgmcore/ay8910.cpp vgmcore/ym2413.cpp vgmcore/segapcm.cpp
+        vgmcore/ym2610.cpp vgmcore/qsound.cpp vgmcore/qsoundhle/qsound.c
+        vgmcore/ymfm/ymfm_opn.cpp
+        vgmcore/ymfm/ymfm_adpcm.cpp vgmcore/ymfm/ymfm_ssg.cpp
+        vgmcore/emu2149.c vgmcore/emu2413.c
+        mdxcore/ym2151.cpp mdxcore/opm.c)
+    target_include_directories(vgmrender PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(vgmrender PRIVATE z)
+
+    # sngdump: a Ballade .SNG to a .mid, so the converter can be scored
+    # against SNG2S's output over a whole folder without launching the player.
+    add_executable(sngdump tests/sngdump.cpp sngmidi.cpp)
+    target_include_directories(sngdump PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(sngdump PRIVATE Qt6::Core)
+
+    add_executable(mdxmid
+        tests/mdxmid.cpp mdxmidi.cpp
+        mdxcore/mxdrv.cpp mdxcore/ym2151.cpp mdxcore/msm6258.cpp mdxcore/opm.c)
+    target_include_directories(mdxmid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(mdxmid PRIVATE Qt6::Core)
+
+    # mldrender: the OPM half of an MLD .mdz to a WAV. This format has no
+    # reference render - mld.x is a resident X68000 driver - so this is how the
+    # FM engine gets listened to and compared between builds at all.
+    # mldplayer: the layer above the engine, driven the way MainWindow drives it.
+    # MldFmPlayer asks JJoMeSynth for the device's sample rate - it must run its
+    # sequencer at the rate the MIDI half is running at, or the two drift apart
+    # within seconds - so this harness needs the player's whole audio layer,
+    # the same set midiwav links.
+    add_executable(mldplayer
+        tests/mldplayer.cpp ${JMP_TEST_ENGINE_SOURCES})
+    target_include_directories(mldplayer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(mldplayer PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu
+        winmm dwmapi avrt z)
+
+    add_executable(mldrender
+        tests/mldrender.cpp mldfm.cpp mdxmidi.cpp
+        mdxcore/ym2151.cpp mdxcore/msm6258.cpp mdxcore/opm.c)
+    target_include_directories(mldrender PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(mldrender PRIVATE Qt6::Core)
+
+    add_executable(midiwav tests/midiwav.cpp ${JMP_TEST_ENGINE_SOURCES})
+    target_link_libraries(midiwav PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu
+        winmm dwmapi avrt z)
+    target_include_directories(midiwav PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # seekstate: drives the real MidiPlayer and JJoMeSynth and asks the synth
+    # what instrument each channel ended up on after a seek.
+    add_executable(seekstate tests/seekstate.cpp ${JMP_TEST_ENGINE_SOURCES})
+    target_link_libraries(seekstate PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia adplug mt32emu
+        winmm dwmapi avrt z)
+    target_include_directories(seekstate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    foreach(t loadall render inputs midiall mt32 mt32ui rcpdump midiwav seekstate)
         if(ENGLISH_UI)
             target_compile_definitions(${t} PRIVATE ENGLISH_UI)
         endif()
@@ -475,7 +810,7 @@ if(BUILD_TESTS)
     # The tools that link mt32emu need its DLL beside them to start at all.
     # Without this they fail silently under run_tests.bat - the section header
     # prints and nothing follows, because Windows cannot load the process.
-    foreach(t render midiall mt32 mt32ui)
+    foreach(t render midiall mt32 mt32wav mt32ui rcpdump midiwav seekstate)
         add_custom_command(TARGET ${t} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_FILE:mt32emu> $<TARGET_FILE_DIR:${t}>)
